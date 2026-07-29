@@ -167,6 +167,14 @@ export function SplitPanel() {
     }
   }
 
+  // 打包下载：按顺序拼接所有切片 Blob（纯前端零依赖，适合切片数 < 500 场景）
+  const downloadBundle = () => {
+    if (results.length === 0) return
+    const bundle = new Blob(results.map((r) => r.blob), { type: 'application/octet-stream' })
+    downloadBlob(bundle, `${file!.name}.sliced.bundle`)
+    toast(`已打包下载 ${results.length} 个切片（按顺序拼接，解压前请记录命名规范）`, 'success')
+  }
+
   const downloadChunk = (idx: number) => {
     const target = results[idx]
     if (!target) return
@@ -363,12 +371,21 @@ export function SplitPanel() {
                   <span className="w-2 h-2 bg-emerald-400 pulse-dot" />
                   分割完成（共 {results.length} 个，{formatBytes(totalOutSize)}）
                 </h3>
-                <button
-                  onClick={downloadAll}
-                  className="px-4 py-1.5 text-xs font-mono font-bold bg-zinc-100 text-zinc-950 light:bg-zinc-900 light:text-zinc-50 pressable transition-fast"
-                >
-                  逐个下载全部
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={downloadBundle}
+                    className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
+                    title="按顺序拼接为单文件下载"
+                  >
+                    打包下载
+                  </button>
+                  <button
+                    onClick={downloadAll}
+                    className="px-4 py-1.5 text-xs font-mono font-bold bg-zinc-100 text-zinc-950 light:bg-zinc-900 light:text-zinc-50 pressable transition-fast"
+                  >
+                    逐个下载全部
+                  </button>
+                </div>
               </div>
               <div className="max-h-80 overflow-y-auto space-y-1.5 pr-1">
                 {results.map((c, i) => (
