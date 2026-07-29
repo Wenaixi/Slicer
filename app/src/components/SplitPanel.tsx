@@ -9,6 +9,7 @@ import { formatBytes, downloadBlob } from '../lib/utils'
 import { estimateEncryptSeconds, formatEstimateSeconds } from '../lib/perf'
 import { streamSplit, estimateEncryptedSize } from '../lib/stream-split'
 import { DEFAULT_SPLIT_OPTIONS, computeChunkPlan, type SplitOptions } from '../lib/split'
+import { packAsZip, suggestedZipName } from '../lib/archive'
 import {
   probeResumePlan,
   saveProgress,
@@ -279,6 +280,23 @@ export function SplitPanel() {
     toast(`已打包下载 ${results.length} 个切片（按顺序拼接，解压前请记录命名规范）`, 'success')
   }
 
+  /** 打包 ZIP 下载：把切片按命名规范塞进单一 ZIP，便于传输与归档 */
+  const downloadZip = async () => {
+    if (results.length === 0) return
+    toast('正在打包 ZIP…', 'info')
+    // 逐块读 arrayBuffer 避免 Blob → Uint8Array 类型转换问题
+    const entries = await Promise.all(
+      results.map(async (r) => ({
+        name: r.name,
+        data: new Uint8Array(await r.blob.arrayBuffer()),
+        size: r.blob.size,
+      })),
+    )
+    const zipped = packAsZip(entries)
+    downloadBlob(zipped, suggestedZipName(file!.name))
+    toast(`已打包为 ZIP（${results.length} 个切片）`, 'success')
+  }
+
   const downloadChunk = (idx: number) => {
     const target = results[idx]
     if (!target) return
@@ -543,6 +561,13 @@ export function SplitPanel() {
                   分割完成（共 {results.length} 个，{formatBytes(totalOutSize)}）
                 </h3>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={downloadZip}
+                    className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
+                    title="把所有切片打包成单个 ZIP 文件（合并端可直接拖入 ZIP 自动解压）"
+                  >
+                    打包 ZIP
+                  </button>
                   <button
                     onClick={downloadBundle}
                     className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"

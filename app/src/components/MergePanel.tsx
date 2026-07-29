@@ -8,6 +8,135 @@ import { formatBytes, downloadBlob } from '../lib/utils'
 import { groupMergeFiles, fileDedupKey, type MergeGroup } from '../lib/merge'
 import { pickSaveLocation, pickFolderAndCreateFile, supportsDirectorySave, supportsFsAccess } from '../lib/fs-access'
 import { streamMerge } from '../lib/stream-merge'
+import { detectArchiveKind, unzipAll, filterChunkEntries } from '../lib/archive'
+
+/** webkit 文件夹拖入：把目录里的所有文件递归拉平成 File[]。非 WebKit 静默返回 [f]。 */
+async function flattenIfDirectory(file: File): Promise<File[]> {
+  const w = file as File & { webkitGetAsEntry?: () => FileSystemEntry | null }
+  if (typeof w.webkitGetAsEntry !== 'function') return [file]
+  const entry = w.webkitGetAsEntry()
+  if (!entry) return [file]
+  if (!entry.isDirectory) return [file]
+  const out: File[] = []
+  // readEntries 是批量的，需要循环直到返回空
+  const readAll = (r: FileSystemDirectoryReader): Promise<FileSystemEntry[]> =>
+    new Promise((resolve) => {
+      const acc: FileSystemEntry[] = []
+      const pump = () => {
+        r.readEntries((batch) => {
+          if (batch.length === 0) resolve(acc)
+          else {
+            acc.push(...batch)
+            pump()
+          }
+        }, () => resolve(acc))
+      }
+      pump()
+    })
+  const walk = async (e: FileSystemEntry, prefix: string): Promise<void> => {
+    if (e.isFile) {
+      const f = await new Promise<File>((resolve, reject) =>
+        (e as FileSystemFileEntry).file(resolve, reject),
+      )
+      // 把原始相对路径拼进 name，保留命名信息
+      const renamed = new File([f], prefix + f.name, { type: f.type })
+      out.push(renamed)
+    } else if (e.isDirectory) {
+      const children = await readAll((e as FileSystemDirectoryEntry).createReader())
+      for (const c of children) await walk(c, prefix + e.name + '/')
+    }
+  }
+  const entries = await readAll((entry as FileSystemDirectoryEntry).createReader())
+  for (const e of entries) await walk(e, '')
+  return out
+}
+
+/**
+ * 把入站文件列表展开：
+ *  - .zip → 自动解压并把其中的切片文件加进队列
+ *  - .7z  → 提示暂不支持
+ *  - 普通文件 → 直接去重加入
+ * 返回成功追加的文件数量
+ */
+async function expandIncoming(
+  incoming: File[],
+  setFiles: React.Dispatch<React.SetStateAction<File[]>>,
+): Promise<number> {
+  let added = 0
+  const direct: File[] = []
+  // 先把可能的目录条目展平
+  const flat: File[] = []
+  for (const f of incoming) flat.push(...(await flattenIfDirectory(f)))
+  for (const f of flat) {
+    const lower = f.name.toLowerCase()
+    if (lower.endsWith('.zip') || lower.endsWith('.7z')) {
+      // 读前 4 字节做魔数识别（避免误判）
+      try {
+        const head = new Uint8Array(await f.slice(0, 6).arrayBuffer())
+        const kind = detectArchiveKind(head)
+        if (kind === '7z') {
+          toast(`「${f.name}」是 7z 格式，暂不支持，请改用 ZIP 重新打包`, 'error')
+          continue
+        }
+        if (kind === 'zip') {
+          const entries = await unzipAll(f)
+          const chunks = filterChunkEntries(entries)
+          if (chunks.length === 0) {
+            toast(`「${f.name}」里没有识别到切片文件`, 'info')
+            continue
+          }
+          // 把解压出来的字节包装成 File（保留原 ZIP 内的相对名作为 name）
+          const newFiles: File[] = chunks.map((c) => {
+            const file = new File([c.data.buffer as ArrayBuffer], c.name, {
+              type: 'application/octet-stream',
+            })
+            return file
+          })
+          setFiles((prev) => {
+            const seen = new Set(prev.map(fileDedupKey))
+            const next = [...prev]
+            for (const nf of newFiles) {
+              const key = fileDedupKey(nf)
+              if (!seen.has(key)) {
+                seen.add(key)
+                next.push(nf)
+                added++
+              }
+            }
+            return next
+          })
+          toast(`已从「${f.name}」解压 ${chunks.length} 个切片`, 'info')
+          continue
+        }
+        // unknown：当作普通文件
+        direct.push(f)
+      } catch (err) {
+        toast(
+          `「${f.name}」处理失败：${err instanceof Error ? err.message : '未知错误'}`,
+          'error',
+        )
+      }
+    } else {
+      direct.push(f)
+    }
+  }
+  if (direct.length > 0) {
+    setFiles((prev) => {
+      const seen = new Set(prev.map(fileDedupKey))
+      const next = [...prev]
+      for (const f of direct) {
+        const key = fileDedupKey(f)
+        if (!seen.has(key)) {
+          seen.add(key)
+          next.push(f)
+          added++
+        }
+      }
+      return next
+    })
+  }
+  return added
+}
 
 export function MergePanel() {
   const { tab } = useAppState()
@@ -16,6 +145,7 @@ export function MergePanel() {
   const [decrypting, setDecrypting] = useState(false)
   const [progress, setProgress] = useState(0)
   const [progressLabel, setProgressLabel] = useState('')
+  const [extracting, setExtracting] = useState(false)
 
   useEffect(() => {
     // 切片合并面板每次进入时清空密码（防误复用到其他文件）
@@ -26,33 +156,20 @@ export function MergePanel() {
 
   const groups: MergeGroup[] = useMemo(() => groupMergeFiles(files), [files])
 
-  // 全局拖拽：window drop 事件路由到合并 Tab
-  const handleGlobalDrop = useCallback((incoming: File[]) => {
+  // 全局拖拽：window drop 事件路由到合并 Tab，自动展开 ZIP / 文件夹
+  const handleGlobalDrop = useCallback(async (incoming: File[]) => {
     if (incoming.length === 0) return
-    const seen = new Set(files.map(fileDedupKey))
-    let added = 0
-    for (const f of incoming) {
-      const key = fileDedupKey(f)
-      if (!seen.has(key)) {
-        seen.add(key)
-        added++
-      }
-    }
-    setFiles((prev) => {
-      const next = [...prev]
-      for (const f of incoming) {
-        const key = fileDedupKey(f)
-        if (!next.some((x) => fileDedupKey(x) === key)) next.push(f)
-      }
-      return next
-    })
-    if (added > 0) toast(`已追加 ${added} 个切片`, 'success')
-  }, [files])
+    const expanded = await expandIncoming(incoming, setFiles)
+    if (expanded > 0) toast(`已识别并追加 ${expanded} 个切片`, 'success')
+  }, [])
 
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ files: File[] }>).detail
-      if (tab === 'merge' && detail?.files) handleGlobalDrop(detail.files)
+      if (tab === 'merge' && detail?.files) {
+        setExtracting(true)
+        handleGlobalDrop(detail.files).finally(() => setExtracting(false))
+      }
     }
     window.addEventListener('slicer:global-drop', handler)
     return () => window.removeEventListener('slicer:global-drop', handler)
@@ -60,24 +177,11 @@ export function MergePanel() {
 
   if (tab !== 'merge') return null
 
-  const addFiles = (incoming: File[]) => {
+  const addFiles = async (incoming: File[]) => {
     if (incoming.length === 0) return
-    setFiles((prev) => {
-      const seen = new Set(prev.map(fileDedupKey))
-      const next = [...prev]
-      let added = 0
-      for (const f of incoming) {
-        const key = fileDedupKey(f)
-        if (!seen.has(key)) {
-          seen.add(key)
-          next.push(f)
-          added++
-        }
-      }
-      if (added > 0) toast(`已追加 ${added} 个切片`, 'success')
-      else toast('文件已在队列中（按名称+大小+时间去重）', 'info')
-      return next
-    })
+    const added = await expandIncoming(incoming, setFiles)
+    if (added === 0) toast('文件已在队列中（按名称+大小+时间去重）', 'info')
+    else toast(`已识别并追加 ${added} 个切片`, 'success')
   }
 
   const removeFile = (name: string) => {
@@ -238,10 +342,19 @@ export function MergePanel() {
     <section className="space-y-6">
       <DropZone
         title="拖拽切片文件到此处"
-        hint="支持分批多次追加；按文件名特征自动归组排序"
+        hint="支持分批多次追加；支持直接拖入 ZIP 压缩包（自动解压并识别切片）；支持多个 ZIP；7z 暂不支持请改用 ZIP"
         onFiles={addFiles}
         multiple
       />
+
+      {extracting && (
+        <div className="border border-blue-500/30 bg-blue-500/5 light:bg-blue-50 p-3 text-xs font-mono text-blue-400 light:text-blue-700 flex items-center gap-2">
+          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+          正在解压 ZIP / 识别切片…
+        </div>
+      )}
 
       {files.length > 0 && (
         <>

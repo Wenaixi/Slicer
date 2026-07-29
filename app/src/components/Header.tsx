@@ -31,8 +31,8 @@ export function Header() {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex items-center gap-2 text-xs font-mono text-zinc-500" aria-hidden="true">
             <span>快捷键</span>
-            <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">S</kbd>
-            <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">M</kbd>
+            <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">Q</kbd>
+            <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">W</kbd>
             <span className="opacity-50">/</span>
             <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">←</kbd>
             <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">→</kbd>

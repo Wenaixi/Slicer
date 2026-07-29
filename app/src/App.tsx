@@ -27,7 +27,8 @@ export default function App() {
     })
   }, [])
 
-  // 键盘快捷键：S = 分割，M = 合并，左右方向键切换；输入框聚焦时忽略
+  // 键盘快捷键：S/M 会与浏览器内置（保存网页/查找）冲突，改用 Q/W；
+  // 左右方向键仍可切换 Tab；输入框聚焦时忽略。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
@@ -37,9 +38,10 @@ export default function App() {
         target.tagName === 'SELECT'
       )
       if (inForm) return
-      if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 's') {
+      if (e.altKey || e.ctrlKey || e.metaKey) return
+      if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'q') {
         setTab('split')
-      } else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'm') {
+      } else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'w') {
         setTab('merge')
       }
     }
