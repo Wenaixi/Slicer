@@ -2,7 +2,7 @@
 
 > 项目根：`D:\newC\stick2\Slicer\app`（Vite + React 19 + TypeScript + Tailwind CSS v4）
 > 定位：纯前端高性能文件分割/合并工具，可选 SealGo 密码加密，黑白极简 + Apple 流体动效。
-> 最后更新：2026-07-30（v12 流式/ZIP 完成）
+> 最后更新：2026-07-30（v15 收尾：批量ZIP/进度仪表/跨标签/虚拟滚动/错误分类 + 响应式）
 
 ## 1. 项目结构
 
@@ -21,9 +21,13 @@ app/
 │   │   ├── password-gen.ts # CSPRNG 密码生成器
 │   │   ├── perf.ts         # 加密吞吐量估算 + formatEstimateSeconds
 │   │   ├── stream-split.ts # 流式分割执行器（File.slice 零拷贝 + onChunk 回调 + skipIndices 续传）
-│   │   ├── stream-merge.ts # 流式合并执行器（明文/加密统一走 onPlainChunk）
+│   │   ├── stream-merge.ts # 流式合并执行器（明文/加密统一走 onPlainChunk + StreamMergeError 错误分类）
 │   │   ├── resume.ts       # 断点续传：probeResumePlan + sessionStorage 进度
 │   │   ├── archive.ts      # ZIP 打包/解压（fflate）：detectArchiveKind/packAsZip/unzipAll/filterChunkEntries
+│   │   ├── cross-tab.ts    # 跨标签进度共享：BroadcastChannel 'slicer:split-progress'
+│   │   ├── progress-meter.ts # 实时吞吐仪表：指数滑动平均 MB/s + ETA + 已跳过切片计数
+│   │   ├── virtualize.ts   # 轻量虚拟滚动：useVirtualWindow（无依赖，仅渲染可视区+缓冲带）
+│   │   ├── decrypt-error.ts # 解密错误分类：wrong-password / not-sealgo / header-corrupt / cipher-corrupt
 │   │   └── utils.ts        # formatBytes/downloadBlob/nextFrame/passwordStrength 等
 │   ├── components/         # React 组件层（全部函数组件 + hooks）
 │   │   ├── App.tsx         # 根布局、主题类名同步、WASM 预热
@@ -169,7 +173,10 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 | v10 | ✅ 完成 | 断点续传：目录探测跳过已完成切片 + sessionStorage 进度持久化 + File System Access API 直写磁盘 |
 | v11 | ✅ 完成 | 流式合并/解密：stream-merge.ts 统一明文/加密路径，onPlainChunk 回调逐块交付，内存峰值 O(chunkSize) |
 | v12 | ✅ 完成 | 快捷键 S/M→Q/W（避开浏览器冲突）+ ZIP 打包/解压 + 文件夹拖拽（webkitGetAsEntry 递归拉平） |
-| v13+ | ⏳ 待做 | 跨标签进度共享（BroadcastChannel / localStorage）、续传可视化进度条、7z 完整支持（7z-wasm） |
+| v13 | ✅ 完成 | 批量 ZIP 合并：保留 ZIP 内相对路径作为 name，让 groupMergeFiles 跨 ZIP 按 baseName 归组 |
+| v14 | ✅ 完成 | 进度可视化：progress-meter（指数滑动平均 MB/s + ETA）+ 实时仪表 4 列（吞吐/ETA/已处理/已跳过） |
+| v15 | ✅ 完成 | 跨标签进度共享（BroadcastChannel）+ 虚拟滚动（>80 行启用）+ 解密错误分类 + 响应式设计 6 段媒体查询 |
+| v16+ | ⏳ 待做 | 7z 完整支持（7z-wasm）、Worker 加密移到后台线程、切片完整性校验（SHA-256 manifest） |
 
 ## 6. 已修复的坑（防止回归）
 
@@ -212,10 +219,21 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 - **压缩端**：packAsZip（fflate level=1 速度优先）/ unzipAll（魔数识别 ZIP/7z，7z 暂不支持）/ filterChunkEntries（按 part/number/infix 三种命名规范过滤）
 - **快捷键**：S/M 会与浏览器内置冲突 → 改 Q/W；方向键 ← / → 保留
 
+## 7.5 收尾五件套（v13-v15）
+
+- **批量 ZIP**：merge.expandIncoming 解压时保留 ZIP 内相对路径（`/` → `.`），让 groupMergeFiles 按 baseName 归组；同组切片可来自多个 ZIP / 文件夹 / 散文件
+- **进度可视化**：progress-meter（250ms 滑动窗口 + 指数平均 α=0.4）输出 mbps；estimateEtaSeconds 基于 mbps 推算剩余秒数；SplitPanel 在执行时显示 4 列仪表
+- **跨标签进度**：cross-tab（BroadcastChannel `'slicer:split-progress'`）五种事件（start/progress/done/abort/resume），SplitPanel 订阅后显示「另一个标签页正在分割同一文件 · 已完成 N/M」
+- **虚拟滚动**：virtualize（useVirtualWindow hook）只渲染可视区 + overscan 缓冲带，paddingTop/paddingBottom 占位维持总高度；SplitPanel 结果 >80 行启用，MergePanel 组内 >30 行启用
+- **解密错误分类**：decrypt-error（classifyDecryptError）按密文头结构拆解为五类：wrong-password / not-sealgo / header-corrupt / cipher-corrupt / internal；MergePanel 出错时双 toast（类型标签 + 中文兜底建议）
+- **响应式设计**：index.css 六段媒体查询：移动端 95% 字号 + 大标题字距 -0.04em；触屏目标最小 44px（Apple HIG）；横屏小屏 max-height: 480px 压缩 padding；pointer:coarse 强制最小高度
+
 ## 8. 测试基线
 
-- 11 个测试文件，78 个用例（vitest + jsdom + @testing-library/react）
-- 协议级（crypto/merge/split/stream-split/stream-merge/resume/archive）常跑
+- 13 个测试文件，90 个用例（vitest + jsdom + @testing-library/react）
+- 协议级（crypto/merge/split/stream-split/stream-merge/resume/archive/decrypt-error/progress-meter）常跑
 - WASM e2e 默认跳过（jsdom 兼容性边界）
 - 加密估算 `estimateEncryptedSize(plainSize, chunkSize)` 5 例覆盖边界
 - archive 模块 11 例覆盖魔数识别 / ZIP 往返 / 切片过滤 / 命名建议
+- decrypt-error 7 例覆盖魔数错/长度残缺/版本不支持/密码错误分类
+- progress-meter 5 例覆盖累计/百分比/ETA 计算
