@@ -27,6 +27,7 @@ export function SplitPanel() {
   const [progress, setProgress] = useState(0)
   const [progressLabel, setProgressLabel] = useState('')
   const [results, setResults] = useState<ChunkResult[]>([])
+  const [directToDisk, setDirectToDisk] = useState(false)
   const abortRef = useRef(false)
 
   // 重置进度与中止标记当文件或选项变化
@@ -88,16 +89,50 @@ export function SplitPanel() {
       return
     }
 
+    // 直写磁盘模式：每块切片立即写入用户选定的目录，浏览器零结果驻留
+    let dirHandle: FileSystemDirectoryHandle | null = null
+    if (directToDisk && typeof window !== 'undefined') {
+      const picker = (window as Window & {
+        showDirectoryPicker?: (opts?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>
+      }).showDirectoryPicker
+      if (typeof picker === 'function') {
+        try {
+          dirHandle = await picker({ mode: 'readwrite' })
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          throw err
+        }
+      } else {
+        toast('当前浏览器不支持目录选择，已降级为顺序下载', 'info')
+        setDirectToDisk(false)
+      }
+    }
+
     setProcessing(true)
     setProgress(0)
     setResults([])
     abortRef.current = false
 
+    const chunks: ChunkResult[] = []
     try {
-      const chunks: ChunkResult[] = []
       const summary = await streamSplit(file, options, {
         shouldAbort: () => abortRef.current,
         onChunk: (chunk) => {
+          // 直写磁盘：立即落盘，不驻留内存
+          if (dirHandle) {
+            void (async () => {
+              try {
+                const handle = await (dirHandle as unknown as {
+                  getFileHandle: (n: string, opts: { create: boolean }) => Promise<FileSystemFileHandle>
+                }).getFileHandle(chunk.name, { create: true })
+                const writable = await (handle as unknown as { createWritable: () => Promise<{ write: (b: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void> }> }).createWritable()
+                await writable.write(chunk.blob)
+                await writable.close()
+              } catch (err) {
+                console.error('写磁盘失败:', err)
+              }
+            })()
+          }
           chunks.push({
             name: chunk.name,
             blob: chunk.blob,
@@ -123,7 +158,12 @@ export function SplitPanel() {
         return
       }
       setResults(chunks)
-      toast(`已分割为 ${summary.totalParts} 个切片${summary.encrypted ? '（已加密）' : ''}`, 'success')
+      toast(
+        dirHandle
+          ? `已逐切片写入磁盘（${summary.totalParts} 个）`
+          : `已分割为 ${summary.totalParts} 个切片${summary.encrypted ? '（已加密）' : ''}`,
+        'success',
+      )
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         toast('已取消分割', 'info')
