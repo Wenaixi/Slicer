@@ -14,3 +14,22 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
     dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia
 }
+
+// Go WASM 的 js.Global() 在 jsdom 环境映射到 Node 的 globalThis。
+// 将 wasm_exec.js 执行到 globalThis 上，让 window.Go 通过 globalThis 暴露给 jsdom window。
+import { readFileSync, existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+
+;(function loadGoRuntime() {
+  const wasmDir = resolve(process.cwd(), 'public/wasm')
+  const execPath = join(wasmDir, 'wasm_exec.js')
+  if (!existsSync(execPath)) return
+  if (typeof (globalThis as { Go?: unknown }).Go === 'function') return
+  try {
+    const code = readFileSync(execPath, 'utf-8')
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    new Function(code)()
+  } catch (e) {
+    console.warn('[vitest setup] 注入 wasm_exec.js 失败:', e)
+  }
+})()

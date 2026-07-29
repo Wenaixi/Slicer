@@ -97,3 +97,14 @@ export function extractPlainSize(cipher: Uint8Array): number {
   const view = new DataView(cipher.buffer, cipher.byteOffset + 92, 8);
   return Number(view.getBigUint64(0, true));
 }
+
+/** 提取 Argon2 参数（encryptWithKey 写入预留区 68..79） */
+export function extractArgonParams(cipher: Uint8Array): { time: number; memory: number; threads: number } | null {
+  if (!isSealGoFile(cipher) || cipher.length < 80) return null;
+  const view = new DataView(cipher.buffer, cipher.byteOffset + 68, 12);
+  return {
+    time: view.getUint32(0, true),
+    memory: view.getUint32(4, true),
+    threads: view.getUint32(8, true),
+  };
+}

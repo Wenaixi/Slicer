@@ -6,6 +6,7 @@ import { PasswordPanel } from './PasswordPanel'
 import { ProgressBar } from './ProgressBar'
 import { toast } from '../lib/toast'
 import { formatBytes, downloadBlob, nextFrame } from '../lib/utils'
+import { estimateEncryptSeconds, formatEstimateSeconds } from '../lib/perf'
 import {
   DEFAULT_SPLIT_OPTIONS,
   computeChunkPlan,
@@ -302,12 +303,16 @@ export function SplitPanel() {
             </div>
 
             {/* 预览 */}
-            <div className="border-t border-zinc-800 light:border-zinc-200 pt-4 flex items-center justify-between font-mono text-xs">
+            <div className="border-t border-zinc-800 light:border-zinc-200 pt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 font-mono text-xs">
               <span>
                 预计 <strong className="text-zinc-100 light:text-zinc-900">{plan.totalParts}</strong> 个切片
               </span>
               <span>
                 单个约 <strong className="text-zinc-100 light:text-zinc-900">{formatBytes(plan.chunkSize)}</strong>
+              </span>
+              <span className="text-zinc-500">
+                预计耗时 <strong className="text-zinc-300 light:text-zinc-700">{formatEstimateSeconds(estimateEncryptSeconds(file.size, options.encrypt))}</strong>
+                {options.encrypt && '（含 Argon2 派生 ~1s）'}
               </span>
             </div>
           </div>
