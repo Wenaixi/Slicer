@@ -10,6 +10,7 @@ import {
   isSealGoFile,
   decryptChunkWithPassword,
 } from '../lib/crypto'
+import { pickSaveLocation, supportsFsAccess } from '../lib/fs-access'
 
 export function MergePanel() {
   const { tab } = useAppState()
@@ -101,7 +102,7 @@ export function MergePanel() {
     )
   }
 
-  const executeMerge = async (group: MergeGroup) => {
+  const executeMerge = async (group: MergeGroup, saveToDisk = false) => {
     if (group.items.length === 0) return
     setDecrypting(true)
     setProgress(0)
@@ -115,6 +116,17 @@ export function MergePanel() {
           { type: 'application/octet-stream' },
         )
         setProgress(100)
+
+        if (saveToDisk) {
+          const handle = await pickSaveLocation(group.baseName)
+          if (handle) {
+            await handle.write(merged)
+            await handle.close()
+            toast(`已保存到 ${handle.name}`, 'success')
+            return
+          }
+        }
+
         downloadBlob(merged, group.baseName)
         toast(`合并完成 · ${formatBytes(merged.size)}`, 'success')
         return
@@ -147,6 +159,17 @@ export function MergePanel() {
       }
       const merged = new Blob(chunks, { type: 'application/octet-stream' })
       setProgress(100)
+
+      if (saveToDisk) {
+        const handle = await pickSaveLocation(group.baseName)
+        if (handle) {
+          await handle.write(merged)
+          await handle.close()
+          toast(`已保存到 ${handle.name}`, 'success')
+          return
+        }
+      }
+
       downloadBlob(merged, group.baseName)
       toast(`解密并合并完成 · ${formatBytes(merged.size)}`, 'success')
     } catch (err) {
@@ -206,7 +229,8 @@ export function MergePanel() {
               >
                 <GroupCard
                   group={g}
-                  onExecute={() => executeMerge(g)}
+                  onExecute={() => executeMerge(g, false)}
+                  onSaveToDisk={supportsFsAccess() ? () => executeMerge(g, true) : undefined}
                   onRemoveGroup={() => removeGroup(g.baseName)}
                   onRemoveItem={(name) => removeFile(name)}
                   disabled={decrypting}
@@ -227,12 +251,14 @@ export function MergePanel() {
 function GroupCard({
   group,
   onExecute,
+  onSaveToDisk,
   onRemoveGroup,
   onRemoveItem,
   disabled,
 }: {
   group: MergeGroup
   onExecute: () => void
+  onSaveToDisk?: () => void
   onRemoveGroup: () => void
   onRemoveItem: (name: string) => void
   disabled: boolean
@@ -267,7 +293,7 @@ function GroupCard({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
           <button
             onClick={onRemoveGroup}
             disabled={disabled}
@@ -275,6 +301,20 @@ function GroupCard({
           >
             移除该组
           </button>
+          {onSaveToDisk && (
+            <button
+              onClick={onSaveToDisk}
+              disabled={disabled || group.items.length === 0}
+              className={`px-3 py-1.5 text-xs font-mono border border-zinc-700 light:border-zinc-400 transition-fast pressable ${
+                disabled || group.items.length === 0
+                  ? 'text-zinc-500 cursor-not-allowed'
+                  : 'text-zinc-200 light:text-zinc-700 hover:border-zinc-500'
+              }`}
+              title="直接写入文件系统（需浏览器授权）"
+            >
+              保存到文件…
+            </button>
+          )}
           <button
             onClick={onExecute}
             disabled={disabled || group.items.length === 0}
