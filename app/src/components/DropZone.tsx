@@ -51,7 +51,7 @@ export function DropZone({ title, hint, onFiles, multiple = false, disabled = fa
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      className={`relative border-2 border-dashed transition-fast ${
+      className={`relative border-2 border-dashed transition-fast card-enter ${
         dragging
           ? 'border-zinc-300 bg-zinc-900/80 light:border-zinc-700 light:bg-zinc-100'
           : 'border-zinc-800 light:border-zinc-300 bg-zinc-900/40 light:bg-zinc-50 hover:border-zinc-700 light:hover:border-zinc-400'
@@ -67,7 +67,10 @@ export function DropZone({ title, hint, onFiles, multiple = false, disabled = fa
       />
       <label
         htmlFor="dropzone-input"
-        className="flex flex-col items-center justify-center gap-4 p-10 md:p-14 cursor-pointer text-center"
+        className="flex flex-col items-center justify-center gap-4 p-10 md:p-14 cursor-pointer text-center focus-ring"
+        tabIndex={0}
+        role="button"
+        aria-label={title}
       >
         <div className="w-14 h-14 grid place-items-center border border-zinc-700 light:border-zinc-300 text-zinc-400 light:text-zinc-600 transition-fast">
           <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>

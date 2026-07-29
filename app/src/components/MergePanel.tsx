@@ -192,20 +192,26 @@ export function MergePanel() {
               confirmPassword={password}
               onConfirmChange={() => {}}
               disabled={decrypting}
+              decryptMode
             />
           )}
 
           {/* 分组渲染 */}
           <div className="space-y-4">
-            {groups.map((g) => (
-              <GroupCard
+            {groups.map((g, i) => (
+              <div
                 key={g.baseName + (g.encrypted ? '::enc' : '')}
-                group={g}
-                onExecute={() => executeMerge(g)}
-                onRemoveGroup={() => removeGroup(g.baseName)}
-                onRemoveItem={(name) => removeFile(name)}
-                disabled={decrypting}
-              />
+                className="card-enter"
+                style={{ animationDelay: `${Math.min(i * 40, 160)}ms` }}
+              >
+                <GroupCard
+                  group={g}
+                  onExecute={() => executeMerge(g)}
+                  onRemoveGroup={() => removeGroup(g.baseName)}
+                  onRemoveItem={(name) => removeFile(name)}
+                  disabled={decrypting}
+                />
+              </div>
             ))}
           </div>
 
