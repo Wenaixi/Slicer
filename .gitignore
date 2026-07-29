@@ -1,0 +1,8 @@
+﻿node_modules
+dist
+.omc
+app/.omc
+app/dist
+app/node_modules
+*.log
+
