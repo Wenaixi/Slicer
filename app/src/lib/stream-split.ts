@@ -1,6 +1,7 @@
 // 流式分割执行器：未加密零拷贝（File.slice 引用视图），
 // 加密路径逐块物化 + 用后即弃，敏感材料 finally 擦除。
 // 切片通过 onChunk 回调逐块交付，执行器本身不累积结果。
+// 支持（1）跳过续传 skipIndices（2）onChunk 同步触发，消费方可立即落盘
 
 import {
   computeChunkPlan,
@@ -16,12 +17,19 @@ export interface SplitChunkOut {
   blob: Blob
 }
 
+export type StreamSplitPhase =
+  | 'derive'
+  | 'slice'
+  | 'encrypt'
+  | 'skip'
+  | 'done'
+
 export interface StreamSplitProgress {
   index: number
   total: number
   bytesDone: number
   bytesTotal: number
-  phase: 'derive' | 'slice' | 'encrypt' | 'done'
+  phase: StreamSplitPhase
 }
 
 export interface StreamSplitHandlers {
@@ -32,17 +40,26 @@ export interface StreamSplitHandlers {
 
 export interface StreamSplitSummary {
   totalParts: number
+  handledParts: number
+  skippedParts: number
   totalOutSize: number
   encrypted: boolean
+}
+
+export interface StreamSplitOptions {
+  /** 已完成序号集合：跳过加密与产物生成（断点续传） */
+  skipIndices?: Set<number>
 }
 
 export async function streamSplit(
   file: File,
   options: SplitOptions,
   handlers: StreamSplitHandlers,
+  streamOptions: StreamSplitOptions = {},
 ): Promise<StreamSplitSummary> {
   const { chunkSize, totalParts } = computeChunkPlan(file.size, options)
   const { onChunk, onProgress, shouldAbort } = handlers
+  const skipIndices = streamOptions.skipIndices
 
   let fileKey: Uint8Array | null = null
   let salt: Uint8Array | null = null
@@ -53,6 +70,8 @@ export async function streamSplit(
   }
 
   let totalOutSize = 0
+  let handledParts = 0
+  let skippedParts = 0
 
   try {
     for (let index = 1; index <= totalParts; index++) {
@@ -60,6 +79,14 @@ export async function streamSplit(
 
       const start = (index - 1) * chunkSize
       const end = Math.min(start + chunkSize, file.size)
+
+      if (skipIndices?.has(index)) {
+        skippedParts++
+        onProgress({ index, total: totalParts, bytesDone: end, bytesTotal: file.size, phase: 'skip' })
+        await new Promise((r) => setTimeout(r, 0))
+        continue
+      }
+
       const slice = file.slice(start, end)
 
       let outName = buildChunkName(file.name, index, totalParts, options.naming)
@@ -72,19 +99,18 @@ export async function streamSplit(
         outName = encryptedChunkName(outName)
         outBlob = new Blob([cipher.buffer as ArrayBuffer], { type: 'application/octet-stream' })
       } else {
-        // 未加密：File.slice 是磁盘引用视图，不物化 arrayBuffer —— 内存 O(1)
         outBlob = slice
       }
 
       totalOutSize += outBlob.size
+      handledParts++
       onChunk({ index, name: outName, blob: outBlob })
       onProgress({ index, total: totalParts, bytesDone: end, bytesTotal: file.size, phase: 'slice' })
 
-      // 让出主线程：每 8 块一次（约 60fps 预算内不感知）
       if (index % 8 === 0) await new Promise((r) => setTimeout(r, 0))
     }
     onProgress({ index: totalParts, total: totalParts, bytesDone: file.size, bytesTotal: file.size, phase: 'done' })
-    return { totalParts, totalOutSize, encrypted: options.encrypt }
+    return { totalParts, handledParts, skippedParts, totalOutSize, encrypted: options.encrypt }
   } finally {
     if (fileKey) fileKey.fill(0)
   }
@@ -93,6 +119,6 @@ export async function streamSplit(
 /** 加密输出大小估算：100B 头 + 68B stanza + Σ(4B len + plain + 16B tag) */
 export function estimateEncryptedSize(plainSize: number, chunkSize: number): number {
   const parts = Math.ceil(plainSize / Math.max(1, chunkSize))
-  if (plainSize === 0) return 100 + 68 + 20 // 空文件也有 EOF 块
+  if (plainSize === 0) return 100 + 68 + 20
   return 100 + 68 + plainSize + parts * 20
 }

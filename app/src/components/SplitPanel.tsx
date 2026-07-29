@@ -9,6 +9,13 @@ import { formatBytes, downloadBlob } from '../lib/utils'
 import { estimateEncryptSeconds, formatEstimateSeconds } from '../lib/perf'
 import { streamSplit, estimateEncryptedSize } from '../lib/stream-split'
 import { DEFAULT_SPLIT_OPTIONS, computeChunkPlan, type SplitOptions } from '../lib/split'
+import {
+  probeResumePlan,
+  saveProgress,
+  loadProgress,
+  clearProgress,
+  type SplitProgress,
+} from '../lib/resume'
 
 interface ChunkResult {
   name: string
@@ -28,12 +35,40 @@ export function SplitPanel() {
   const [progressLabel, setProgressLabel] = useState('')
   const [results, setResults] = useState<ChunkResult[]>([])
   const [directToDisk, setDirectToDisk] = useState(false)
+  const [resumeMode, setResumeMode] = useState(false)
+  const [completedIndices, setCompletedIndices] = useState<Set<number>>(new Set())
+  const [resumableSaved, setResumableSaved] = useState<SplitProgress | null>(null)
   const abortRef = useRef(false)
 
   // 重置进度与中止标记当文件或选项变化
   useEffect(() => {
     abortRef.current = false
   }, [file, options.encrypt])
+
+  useEffect(() => {
+    // 从 sessionStorage 拉取上次中断的进度
+    const saved = loadProgress()
+    if (saved && saved.fileSize === file?.size && saved.options.sizeValue === options.sizeValue) {
+      setResumableSaved(saved)
+    } else {
+      setResumableSaved(null)
+    }
+  }, [file?.size, options.sizeValue])
+
+  const resumeInterrupt = () => {
+    if (!resumableSaved) return
+    setCompletedIndices(new Set(resumableSaved.completedIndices))
+    setResumeMode(true)
+    setResumableSaved(null)
+    toast(`已恢复进度：续传 ${resumableSaved.completedIndices.length} 个已完成切片之后的余下部分`, 'info')
+  }
+
+  const startFreshSplit = () => {
+    clearProgress()
+    setResumableSaved(null)
+    setCompletedIndices(new Set())
+    setResumeMode(false)
+  }
 
   // 全局拖拽：window drop 事件路由到当前 Tab
   const handleGlobalDrop = useCallback((files: File[]) => {
@@ -89,9 +124,10 @@ export function SplitPanel() {
       return
     }
 
-    // 直写磁盘模式：每块切片立即写入用户选定的目录，浏览器零结果驻留
+    // 直写磁盘 + 续传：用户先选目录
     let dirHandle: FileSystemDirectoryHandle | null = null
-    if (directToDisk && typeof window !== 'undefined') {
+    const useDirectWrite = directToDisk || resumeMode
+    if (useDirectWrite && typeof window !== 'undefined') {
       const picker = (window as Window & {
         showDirectoryPicker?: (opts?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>
       }).showDirectoryPicker
@@ -103,8 +139,21 @@ export function SplitPanel() {
           throw err
         }
       } else {
-        toast('当前浏览器不支持目录选择，已降级为顺序下载', 'info')
-        setDirectToDisk(false)
+        toast('当前浏览器不支持目录选择，已降级为内存模式', 'info')
+        if (directToDisk) setDirectToDisk(false)
+        if (resumeMode) setResumeMode(false)
+      }
+    }
+
+    // 续传：探测目录里已完成的切片
+    let skipIndices: Set<number> | undefined
+    if (dirHandle && resumeMode) {
+      const resumePlan = await probeResumePlan(dirHandle, file.name, options, plan.totalParts)
+      if (resumePlan.resumable) {
+        skipIndices = new Set(resumePlan.completedIndices)
+        toast(`探测到 ${resumePlan.completedIndices.length} 个已完成切片，跳过续传`, 'info')
+      } else {
+        toast('未发现可续传切片，从头开始', 'info')
       }
     }
 
@@ -113,60 +162,106 @@ export function SplitPanel() {
     setResults([])
     abortRef.current = false
 
+    const completedSet = new Set<number>(completedIndices)
+    const startTime = Date.now()
+    let lastSave = 0
+
     const chunks: ChunkResult[] = []
     try {
-      const summary = await streamSplit(file, options, {
-        shouldAbort: () => abortRef.current,
-        onChunk: (chunk) => {
-          // 直写磁盘：立即落盘，不驻留内存
-          if (dirHandle) {
-            void (async () => {
-              try {
-                const handle = await (dirHandle as unknown as {
-                  getFileHandle: (n: string, opts: { create: boolean }) => Promise<FileSystemFileHandle>
-                }).getFileHandle(chunk.name, { create: true })
-                const writable = await (handle as unknown as { createWritable: () => Promise<{ write: (b: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void> }> }).createWritable()
-                await writable.write(chunk.blob)
-                await writable.close()
-              } catch (err) {
-                console.error('写磁盘失败:', err)
-              }
-            })()
-          }
-          chunks.push({
-            name: chunk.name,
-            blob: chunk.blob,
-            size: chunk.blob.size,
-            index: chunk.index,
-            encrypted: options.encrypt,
-          })
+      const summary = await streamSplit(
+        file,
+        options,
+        {
+          shouldAbort: () => abortRef.current,
+          onChunk: (chunk) => {
+            // 直写磁盘：立即落盘，不驻留内存
+            if (dirHandle) {
+              void (async () => {
+                try {
+                  const handle = await (dirHandle as unknown as {
+                    getFileHandle: (n: string, opts: { create: boolean }) => Promise<FileSystemFileHandle>
+                  }).getFileHandle(chunk.name, { create: true })
+                  const writable = await (handle as unknown as { createWritable: () => Promise<{ write: (b: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void> }> }).createWritable()
+                  await writable.write(chunk.blob)
+                  await writable.close()
+                } catch (err) {
+                  console.error('写磁盘失败:', err)
+                }
+              })()
+            }
+            chunks.push({
+              name: chunk.name,
+              blob: chunk.blob,
+              size: chunk.blob.size,
+              index: chunk.index,
+              encrypted: options.encrypt,
+            })
+            // 续传进度：每 4 切片持久化一次（避免 sessionStorage 抖动）
+            completedSet.add(chunk.index)
+            const now = Date.now()
+            if (now - lastSave > 500) {
+              saveProgress({
+                fileName: file.name,
+                fileSize: file.size,
+                options,
+                completedIndices: [...completedSet],
+                startedAt: startTime,
+                updatedAt: now,
+              })
+              lastSave = now
+            }
+          },
+          onProgress: (p) => {
+            setProgress((p.bytesDone / Math.max(1, p.bytesTotal)) * 100)
+            setProgressLabel(
+              p.phase === 'derive'
+                ? 'Argon2id 派生密钥…'
+                : p.phase === 'encrypt'
+                ? `加密切片 ${p.index}/${p.total}`
+                : p.phase === 'skip'
+                ? `跳过已完成 ${p.index}/${p.total}`
+                : `切片 ${p.index}/${p.total}`,
+            )
+          },
         },
-        onProgress: (p) => {
-          setProgress((p.bytesDone / Math.max(1, p.bytesTotal)) * 100)
-          setProgressLabel(
-            p.phase === 'derive'
-              ? 'Argon2id 派生密钥…'
-              : p.phase === 'encrypt'
-              ? `加密切片 ${p.index}/${p.total}`
-              : `切片 ${p.index}/${p.total}`,
-          )
-        },
-      })
+        { skipIndices },
+      )
 
       if (abortRef.current) {
-        toast('已取消分割', 'info')
+        // 中断：保留进度供下次续传
+        saveProgress({
+          fileName: file.name,
+          fileSize: file.size,
+          options,
+          completedIndices: [...completedSet],
+          startedAt: startTime,
+          updatedAt: Date.now(),
+        })
+        toast(`已取消（已保存 ${completedSet.size} 个切片进度，下次可续传）`, 'info')
         return
       }
       setResults(chunks)
+      // 完成时清空进度
+      clearProgress()
+      setCompletedIndices(new Set())
+      setResumeMode(false)
       toast(
         dirHandle
-          ? `已逐切片写入磁盘（${summary.totalParts} 个）`
-          : `已分割为 ${summary.totalParts} 个切片${summary.encrypted ? '（已加密）' : ''}`,
+          ? `已逐切片写入磁盘（${summary.totalParts} 个${summary.skippedParts ? `，跳过 ${summary.skippedParts} 个续传切片` : ''}）`
+          : `已分割为 ${summary.totalParts} 个切片${summary.encrypted ? '（已加密）' : ''}${summary.skippedParts ? `（跳过 ${summary.skippedParts} 个续传切片）` : ''}`,
         'success',
       )
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
-        toast('已取消分割', 'info')
+        saveProgress({
+          fileName: file.name,
+          fileSize: file.size,
+          options,
+          completedIndices: [...completedSet],
+          startedAt: startTime,
+          updatedAt: Date.now(),
+        })
+        toast(`已取消（已保存 ${completedSet.size} 个切片进度，下次可续传）`, 'info')
         return
       }
       console.error(err)
@@ -209,8 +304,37 @@ export function SplitPanel() {
         />
       ) : (
         <>
+          {/* 续传恢复条 */}
+          {resumableSaved && (
+            <div className="border border-blue-500/30 bg-blue-500/5 light:bg-blue-50 p-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono">
+              <div className="flex items-center gap-2 text-blue-400 light:text-blue-700">
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5" />
+                </svg>
+                <span>
+                  检测到上次未完成的「{resumableSaved.fileName}」分割进度
+                  · 已完成 {resumableSaved.completedIndices.length} 个切片
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={resumeInterrupt}
+                  className="px-3 py-1.5 bg-blue-500/20 text-blue-300 light:text-blue-800 border border-blue-500/40 hover:bg-blue-500/30 transition-fast pressable"
+                >
+                  续传
+                </button>
+                <button
+                  onClick={startFreshSplit}
+                  className="px-3 py-1.5 text-zinc-400 light:text-zinc-600 border border-zinc-800 light:border-zinc-300 hover:border-zinc-600 transition-fast pressable"
+                >
+                  重新开始
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* 内存警告 */}
-          {file.size > 500 * 1024 * 1024 && (
+          {file.size > 500 * 1024 * 1024 && !directToDisk && (
             <div className="border border-amber-500/30 bg-amber-500/5 light:bg-amber-50 p-3 text-xs font-mono text-amber-400 light:text-amber-700 flex items-start gap-2">
               <svg className="w-4 h-4 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                 <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
@@ -340,6 +464,23 @@ export function SplitPanel() {
                 </span>
               )}
             </div>
+          </div>
+
+          {/* 直写磁盘开关 */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={directToDisk}
+                onChange={(e) => setDirectToDisk(e.target.checked)}
+                disabled={processing}
+                className="w-4 h-4 accent-zinc-100"
+              />
+              <span className="text-sm font-semibold">直写磁盘（流式下载，低内存占用）</span>
+            </label>
+            <p className="text-xs font-mono text-zinc-500 pl-7">
+              通过 File System Access API 选择一个文件夹，切片将立即落盘不驻留浏览器内存，适合超大文件。中断后下次打开同一文件可选择「续传」跳过已完成切片。
+            </p>
           </div>
 
           {/* 加密选项 */}
