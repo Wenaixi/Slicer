@@ -67,6 +67,11 @@ export function SplitPanel() {
     ? computeChunkPlan(file.size, options)
     : { chunkSize: 0, totalParts: 0 }
 
+  const totalOutSizeApprox = options.encrypt
+    ? // 加密输出 = 100B 头 + 68B stanza + ceil(N / chunkSize) * (4 + chunkSize + 16)
+      100 + 68 + Math.ceil(file?.size ?? 0 / Math.max(1, plan.chunkSize)) * (4 + plan.chunkSize + 16)
+    : file?.size ?? 0
+
   const canExecute =
     !!file &&
     !processing &&
@@ -201,6 +206,18 @@ export function SplitPanel() {
         />
       ) : (
         <>
+          {/* 内存警告 */}
+          {file.size > 500 * 1024 * 1024 && (
+            <div className="border border-amber-500/30 bg-amber-500/5 light:bg-amber-50 p-3 text-xs font-mono text-amber-400 light:text-amber-700 flex items-start gap-2">
+              <svg className="w-4 h-4 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              </svg>
+              <div>
+                <strong>大文件提示</strong>：当前文件 {formatBytes(file.size)}。切片将全部驻留内存，建议确保可用内存 ≥ {formatBytes(file.size * 1.5)}。
+              </div>
+            </div>
+          )}
+
           <FileCard
             name={file.name}
             size={file.size}
@@ -314,6 +331,11 @@ export function SplitPanel() {
                 预计耗时 <strong className="text-zinc-300 light:text-zinc-700">{formatEstimateSeconds(estimateEncryptSeconds(file.size, options.encrypt))}</strong>
                 {options.encrypt && '（含 Argon2 派生 ~1s）'}
               </span>
+              {options.encrypt && (
+                <span className="text-zinc-500">
+                  加密后总大小 ≈ <strong className="text-zinc-300 light:text-zinc-700">{formatBytes(totalOutSizeApprox)}</strong>（含头部 + 标签）
+                </span>
+              )}
             </div>
           </div>
 
