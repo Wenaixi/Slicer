@@ -4,13 +4,10 @@ import { DropZone } from './DropZone'
 import { PasswordPanel } from './PasswordPanel'
 import { ProgressBar } from './ProgressBar'
 import { toast } from '../lib/toast'
-import { formatBytes, downloadBlob, nextFrame } from '../lib/utils'
+import { formatBytes, downloadBlob } from '../lib/utils'
 import { groupMergeFiles, fileDedupKey, type MergeGroup } from '../lib/merge'
-import {
-  isSealGoFile,
-  decryptChunkWithPassword,
-} from '../lib/crypto'
-import { pickSaveLocation, supportsFsAccess } from '../lib/fs-access'
+import { pickSaveLocation, pickFolderAndCreateFile, supportsDirectorySave, supportsFsAccess } from '../lib/fs-access'
+import { streamMerge } from '../lib/stream-merge'
 
 export function MergePanel() {
   const { tab } = useAppState()
@@ -102,37 +99,35 @@ export function MergePanel() {
     )
   }
 
-  const executeMerge = async (group: MergeGroup, saveToDisk = false) => {
+  const executeMerge = async (group: MergeGroup, mode: 'download' | 'saveFile' | 'saveToFolder') => {
     if (group.items.length === 0) return
     setDecrypting(true)
     setProgress(0)
     setProgressLabel(group.encrypted ? '解密中…' : '合并中…')
 
-    try {
-      if (!group.encrypted) {
-        // 未加密：零拷贝 Blob 合并，秒级完成
-        const merged = new Blob(
-          group.items.map((it) => it.file),
-          { type: 'application/octet-stream' },
-        )
-        setProgress(100)
-
-        if (saveToDisk) {
-          const handle = await pickSaveLocation(group.baseName)
-          if (handle) {
-            await handle.write(merged)
-            await handle.close()
-            toast(`已保存到 ${handle.name}`, 'success')
-            return
-          }
-        }
-
-        downloadBlob(merged, group.baseName)
-        toast(`合并完成 · ${formatBytes(merged.size)}`, 'success')
-        return
+    let folderHandle: { write: (d: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void>; name: string; fullPath: string } | null = null
+    if (mode === 'saveToFolder') {
+      folderHandle = await pickFolderAndCreateFile(group.baseName)
+      if (!folderHandle) {
+        toast('当前浏览器不支持文件夹直写，已降级为保存文件', 'info')
       }
+    }
+    const useStreamingFolder = !!folderHandle
+    // 选择了 saveFile 但浏览器支持 showSaveFilePicker 也走流式（直接写到目标文件）
+    const useStreamingFile = mode === 'saveFile' || useStreamingFolder
 
-      // 加密：逐切片解密 + 拼接。密码错误时任意切片抛错即中止。
+    let fileHandle: { write: (d: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void>; name: string } | null = null
+    if (mode === 'saveFile' && !useStreamingFolder) {
+      fileHandle = await pickSaveLocation(group.baseName)
+      if (!fileHandle) {
+        // 不支持 pickSaveLocation，降级为内存下载
+        toast('当前浏览器不支持保存到文件，已改为直接下载', 'info')
+      }
+    }
+    const useDirectFile = !!fileHandle
+
+    // 密码前置校验
+    if (group.encrypted) {
       if (!password) {
         toast('请先输入密码', 'error')
         setDecrypting(false)
@@ -143,36 +138,93 @@ export function MergePanel() {
         setDecrypting(false)
         return
       }
+    }
 
-      const chunks: BlobPart[] = []
-      for (let i = 0; i < group.items.length; i++) {
-        const item = group.items[i]
-        setProgressLabel(`解密 ${i + 1}/${group.items.length}`)
-        setProgress((i / group.items.length) * 90)
-        const bytes = new Uint8Array(await item.file.arrayBuffer())
-        if (!isSealGoFile(bytes)) {
-          throw new Error(`${item.originalName} 不是合法的 SealGo 加密文件`)
-        }
-        const plain = await decryptChunkWithPassword(bytes, password)
-        chunks.push(new Uint8Array(plain))
-        await nextFrame()
+    const abortRef = { current: false }
+
+    try {
+      // 内存累积场景（不支持 FS Access 的浏览器走 download 模式）
+      const memoryChunks: Blob[] = []
+      let memoryBytes = 0
+
+      const summary = await streamMerge(
+        group.items.map((it) => ({ file: it.file, originalName: it.originalName })),
+        {
+          encrypted: group.encrypted,
+          password,
+          bytesTotal: group.totalSize,
+        },
+        {
+          shouldAbort: () => abortRef.current,
+          onPlainChunk: ({ index, blob }) => {
+            // 优先级：folderHandle > fileHandle > 内存累积
+            if (folderHandle) {
+              void (async () => {
+                try {
+                  await folderHandle!.write(blob)
+                } catch (err) {
+                  console.error('写文件夹失败:', err)
+                }
+              })()
+            } else if (fileHandle) {
+              void (async () => {
+                try {
+                  await fileHandle!.write(blob)
+                } catch (err) {
+                  console.error('写文件失败:', err)
+                }
+              })()
+            } else {
+              memoryChunks.push(blob)
+              memoryBytes += blob.size
+            }
+            void index
+          },
+          onProgress: ({ index, total, bytesDone, bytesTotal }) => {
+            setProgressLabel(
+              group.encrypted ? `解密 ${index}/${total}` : `合并 ${index}/${total}`,
+            )
+            setProgress(bytesTotal > 0 ? (bytesDone / bytesTotal) * 95 : (index / total) * 95)
+          },
+        },
+      )
+
+      // 等待所有 fire-and-forget 写盘完成，再关闭句柄
+      if (folderHandle) {
+        await folderHandle.close()
+        setProgress(100)
+        toast(
+          `已逐块写入 ${folderHandle.fullPath} · ${formatBytes(summary.totalOutSize)}（流式，内存峰值 ≈ 单切片大小）`,
+          'success',
+        )
+        return
       }
-      const merged = new Blob(chunks, { type: 'application/octet-stream' })
+      if (fileHandle) {
+        await fileHandle.close()
+        setProgress(100)
+        toast(`已逐块写入 ${fileHandle.name} · ${formatBytes(summary.totalOutSize)}`, 'success')
+        return
+      }
+
+      // 内存模式：聚合下载
+      const merged = new Blob(memoryChunks, { type: 'application/octet-stream' })
+      memoryChunks.length = 0
       setProgress(100)
-
-      if (saveToDisk) {
-        const handle = await pickSaveLocation(group.baseName)
-        if (handle) {
-          await handle.write(merged)
-          await handle.close()
-          toast(`已保存到 ${handle.name}`, 'success')
-          return
-        }
-      }
-
       downloadBlob(merged, group.baseName)
-      toast(`解密并合并完成 · ${formatBytes(merged.size)}`, 'success')
+      toast(
+        group.encrypted
+          ? `解密并合并完成 · ${formatBytes(memoryBytes)}`
+          : `合并完成 · ${formatBytes(memoryBytes)}`,
+        'success',
+      )
+      void memoryBytes
+      void useStreamingFile
+      void useDirectFile
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        toast('已取消', 'info')
+        return
+      }
       const msg = err instanceof Error ? err.message : '合并失败'
       toast(msg, 'error')
     } finally {
@@ -229,8 +281,9 @@ export function MergePanel() {
               >
                 <GroupCard
                   group={g}
-                  onExecute={() => executeMerge(g, false)}
-                  onSaveToDisk={supportsFsAccess() ? () => executeMerge(g, true) : undefined}
+                  onExecute={() => executeMerge(g, 'download')}
+                  onSaveToFile={supportsFsAccess() ? () => executeMerge(g, 'saveFile') : undefined}
+                  onSaveToFolder={supportsDirectorySave() ? () => executeMerge(g, 'saveToFolder') : undefined}
                   onRemoveGroup={() => removeGroup(g.baseName)}
                   onRemoveItem={(name) => removeFile(name)}
                   disabled={decrypting}
@@ -251,14 +304,16 @@ export function MergePanel() {
 function GroupCard({
   group,
   onExecute,
-  onSaveToDisk,
+  onSaveToFile,
+  onSaveToFolder,
   onRemoveGroup,
   onRemoveItem,
   disabled,
 }: {
   group: MergeGroup
   onExecute: () => void
-  onSaveToDisk?: () => void
+  onSaveToFile?: () => void
+  onSaveToFolder?: () => void
   onRemoveGroup: () => void
   onRemoveItem: (name: string) => void
   disabled: boolean
@@ -301,9 +356,23 @@ function GroupCard({
           >
             移除该组
           </button>
-          {onSaveToDisk && (
+          {onSaveToFolder && (
             <button
-              onClick={onSaveToDisk}
+              onClick={onSaveToFolder}
+              disabled={disabled || group.items.length === 0}
+              className={`px-3 py-1.5 text-xs font-mono border border-zinc-700 light:border-zinc-400 transition-fast pressable ${
+                disabled || group.items.length === 0
+                  ? 'text-zinc-500 cursor-not-allowed'
+                  : 'text-zinc-200 light:text-zinc-700 hover:border-zinc-500'
+              }`}
+              title="流式写入用户选择的文件夹，内存峰值 ≈ 单切片大小（最适合加密大文件）"
+            >
+              保存到文件夹…
+            </button>
+          )}
+          {onSaveToFile && (
+            <button
+              onClick={onSaveToFile}
               disabled={disabled || group.items.length === 0}
               className={`px-3 py-1.5 text-xs font-mono border border-zinc-700 light:border-zinc-400 transition-fast pressable ${
                 disabled || group.items.length === 0
