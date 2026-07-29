@@ -2,7 +2,7 @@
 
 > 项目根：`D:\newC\stick2\Slicer\app`（Vite + React 19 + TypeScript + Tailwind CSS v4）
 > 定位：纯前端高性能文件分割/合并工具，可选 SealGo 密码加密，黑白极简 + Apple 流体动效。
-> 最后更新：2026-07-30（v1 完成，进入第 2 轮深度迭代）
+> 最后更新：2026-07-30（v10 断点续传完成）
 
 ## 1. 项目结构
 
@@ -17,7 +17,12 @@ app/
 │   │   ├── merge.ts        # 切片文件名解析、分组、连续性校验
 │   │   ├── store.ts        # 全局状态（主题/Tab，useSyncExternalStore 手写）
 │   │   ├── toast.ts        # 轻量 Toast store（进入/退出动画标记）
-│   │   └── utils.ts        # formatBytes/downloadBlob/passwordStrength 等
+│   │   ├── fs-access.ts    # File System Access API 适配（pickSaveLocation/fallbackDownload/supportsFsAccess）
+│   │   ├── password-gen.ts # CSPRNG 密码生成器
+│   │   ├── perf.ts         # 加密吞吐量估算 + formatEstimateSeconds
+│   │   ├── stream-split.ts # 流式分割执行器（File.slice 零拷贝 + onChunk 回调 + skipIndices 续传）
+│   │   ├── resume.ts       # 断点续传：probeResumePlan + sessionStorage 进度
+│   │   └── utils.ts        # formatBytes/downloadBlob/nextFrame/passwordStrength 等
 │   ├── components/         # React 组件层（全部函数组件 + hooks）
 │   │   ├── App.tsx         # 根布局、主题类名同步、WASM 预热
 │   │   ├── Header.tsx      # 顶栏（品牌 + 快捷键提示 + 主题切换）
@@ -155,8 +160,12 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 | 轮次 | 状态 | 目标 |
 |---|---|---|
 | v1 | ✅ 完成 | 基础分割/合并/密码加密，构建通过 |
-| v2 | 🔄 进行中 | 全局拖拽、键盘快捷键、Worker 加解密、主题过渡、错误边界、可访问性 |
-| v3 | ⏳ 待做 | 大文件流式、zip 打包下载、性能压测、edge case 加固、视觉细节抛光 |
+| v2 | ✅ 完成 | 全局拖拽、键盘快捷键、主题过渡、错误边界、可访问性 |
+| v3 | ✅ 完成 | 大文件流式、zip 打包、性能压测、edge case 加固、视觉细节抛光 |
+| v4-v6 | ✅ 完成 | 完善人性化体验、优化性能、深度单测 |
+| v7-v9 | ✅ 完成 | 内存占用优化、Worker/直写磁盘、加密流式 |
+| v10 | ✅ 完成 | 断点续传：目录探测跳过已完成切片 + sessionStorage 进度持久化 + File System Access API 直写磁盘 |
+| v11+ | ⏳ 待做 | 跨标签进度共享（BroadcastChannel / localStorage）、续传可视化进度条、合并端加密大文件直读磁盘 |
 
 ## 6. 已修复的坑（防止回归）
 
@@ -164,3 +173,37 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 2. **SharedArrayBuffer 类型**：`new Blob([uint8])` 会报 TS2322，必须 `uint8.slice().buffer as ArrayBuffer`。
 3. **wasm_exec.js 占位**：GitHub release 中的 wasm_exec.js 是 14B 占位文本，必须用本地 Go 安装目录的真实文件替换。
 4. **拖拽闪烁**：window 级 dragenter/leave 需用计数器（原始 HTML 版用 dragCounter），组件内 DropZone 简化版用单 ref 标记；多层级嵌套时注意冒泡。
+5. **jsdom + Go WASM 不稳定**：fetch('/wasm/SealGo.wasm') 在 jsdom 报 ERR_INVALID_URL → 用 isNode 判断走 node:fs；"Go program has already exited" 反复出现 → 决策：协议级测试常跑，WASM e2e 用 `WASM_E2E=1` 门控（describe.skip 默认）。
+6. **TS6133 死变量**：tsc -b 默认 noUnusedLocals=true，每个 `Edit` 后必须保证引入的全部被引用，否则编译失败。
+7. **planTotalParts 早期笔误**：executeSplit 内 `probeResumePlan(..., planTotalParts)` 未声明 → 组件已 `const plan = computeChunkPlan(file.size, options)`，直接传 `plan.totalParts`。
+
+## 7. 断点续传架构（v10）
+
+### 7.1 双轨持久化
+
+- **磁盘层**：File System Access API 选目录，onChunk 回调逐切片直写（`getFileHandle({create:true}) + createWritable().write(blob).close()`）。切片存在即视为已完成。
+- **会话层**：sessionStorage['slicer:split-progress']，每 500ms 持久化一次（含 fileName/fileSize/options/completedIndices/timestamps）。跨页面刷新可继续。
+
+### 7.2 续传检测流程
+
+1. 用户勾选「直写磁盘」→ 选目录（readwrite 模式）
+2. 若存在 sessionStorage 进度 → 弹出「续传/重新开始」提示条
+3. 续传按钮：把 completedIndices 装入 React state，启动时调 `probeResumePlan(dirHandle, file.name, options, plan.totalParts)`
+4. probeResumePlan 遍历 dirHandle.entries()，按 part/number/infix 三种命名规范解析序号
+5. 返回 SplitResumePlan { resumable, completedIndices, pendingIndices }
+6. streamSplit 接收 `{skipIndices}`，循环内命中则 phase='skip'、bytesDone += chunkSize、不调用 encrypt、不生成 outBlob
+7. 中断/取消时 saveProgress 保留；完成时 clearProgress
+
+### 7.3 设计取舍
+
+- **跳过切片不写 skip 标记文件**：磁盘已存在即完成，避免双重状态
+- **进度保存 vs 写盘一致性**：onChunk 内 saveProgress 与直写并行，存在窗口期内 save 早于写完的极小概率 → 已通过完成态仅在所有 chunk 通过 streamSplit 循环后触发来收敛
+- **不支持 showDirectoryPicker 的浏览器**：降级为内存模式（toast 提示）
+- **parseIndex 同时支持 `.partN.sc` 加密后缀**：因为加密切片名 = 原始名 + `.sc`
+
+## 8. 测试基线
+
+- 9 个测试文件，62 个用例（vitest + jsdom + @testing-library/react）
+- 协议级（crypto/merge/split/stream-split/resume）常跑
+- WASM e2e 默认跳过（jsdom 兼容性边界）
+- 加密估算 `estimateEncryptedSize(plainSize, chunkSize)` 5 例覆盖边界
