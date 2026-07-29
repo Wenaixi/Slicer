@@ -2,7 +2,7 @@
 
 > 项目根：`D:\newC\stick2\Slicer\app`（Vite + React 19 + TypeScript + Tailwind CSS v4）
 > 定位：纯前端高性能文件分割/合并工具，可选 SealGo 密码加密，黑白极简 + Apple 流体动效。
-> 最后更新：2026-07-30（v10 断点续传完成）
+> 最后更新：2026-07-30（v12 流式/ZIP 完成）
 
 ## 1. 项目结构
 
@@ -17,11 +17,13 @@ app/
 │   │   ├── merge.ts        # 切片文件名解析、分组、连续性校验
 │   │   ├── store.ts        # 全局状态（主题/Tab，useSyncExternalStore 手写）
 │   │   ├── toast.ts        # 轻量 Toast store（进入/退出动画标记）
-│   │   ├── fs-access.ts    # File System Access API 适配（pickSaveLocation/fallbackDownload/supportsFsAccess）
+│   │   ├── fs-access.ts    # File System Access API 适配（pickSaveLocation/pickFolderAndCreateFile/supportsFsAccess）
 │   │   ├── password-gen.ts # CSPRNG 密码生成器
 │   │   ├── perf.ts         # 加密吞吐量估算 + formatEstimateSeconds
 │   │   ├── stream-split.ts # 流式分割执行器（File.slice 零拷贝 + onChunk 回调 + skipIndices 续传）
+│   │   ├── stream-merge.ts # 流式合并执行器（明文/加密统一走 onPlainChunk）
 │   │   ├── resume.ts       # 断点续传：probeResumePlan + sessionStorage 进度
+│   │   ├── archive.ts      # ZIP 打包/解压（fflate）：detectArchiveKind/packAsZip/unzipAll/filterChunkEntries
 │   │   └── utils.ts        # formatBytes/downloadBlob/nextFrame/passwordStrength 等
 │   ├── components/         # React 组件层（全部函数组件 + hooks）
 │   │   ├── App.tsx         # 根布局、主题类名同步、WASM 预热
@@ -165,7 +167,9 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 | v4-v6 | ✅ 完成 | 完善人性化体验、优化性能、深度单测 |
 | v7-v9 | ✅ 完成 | 内存占用优化、Worker/直写磁盘、加密流式 |
 | v10 | ✅ 完成 | 断点续传：目录探测跳过已完成切片 + sessionStorage 进度持久化 + File System Access API 直写磁盘 |
-| v11+ | ⏳ 待做 | 跨标签进度共享（BroadcastChannel / localStorage）、续传可视化进度条、合并端加密大文件直读磁盘 |
+| v11 | ✅ 完成 | 流式合并/解密：stream-merge.ts 统一明文/加密路径，onPlainChunk 回调逐块交付，内存峰值 O(chunkSize) |
+| v12 | ✅ 完成 | 快捷键 S/M→Q/W（避开浏览器冲突）+ ZIP 打包/解压 + 文件夹拖拽（webkitGetAsEntry 递归拉平） |
+| v13+ | ⏳ 待做 | 跨标签进度共享（BroadcastChannel / localStorage）、续传可视化进度条、7z 完整支持（7z-wasm） |
 
 ## 6. 已修复的坑（防止回归）
 
@@ -201,9 +205,17 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 - **不支持 showDirectoryPicker 的浏览器**：降级为内存模式（toast 提示）
 - **parseIndex 同时支持 `.partN.sc` 加密后缀**：因为加密切片名 = 原始名 + `.sc`
 
+## 7.4 流式架构统一（v11/v12）
+
+- **分割端**：stream-split（File.slice 零拷贝 / 加密逐块物化）→ onChunk 回调 → 直写磁盘 or 内存累积
+- **合并端**：stream-merge（明文走 arrayBuffer / 加密走 decryptChunkWithPassword）→ onPlainChunk 回调 → 直写磁盘（File/Folder）or 内存累积
+- **压缩端**：packAsZip（fflate level=1 速度优先）/ unzipAll（魔数识别 ZIP/7z，7z 暂不支持）/ filterChunkEntries（按 part/number/infix 三种命名规范过滤）
+- **快捷键**：S/M 会与浏览器内置冲突 → 改 Q/W；方向键 ← / → 保留
+
 ## 8. 测试基线
 
-- 9 个测试文件，62 个用例（vitest + jsdom + @testing-library/react）
-- 协议级（crypto/merge/split/stream-split/resume）常跑
+- 11 个测试文件，78 个用例（vitest + jsdom + @testing-library/react）
+- 协议级（crypto/merge/split/stream-split/stream-merge/resume/archive）常跑
 - WASM e2e 默认跳过（jsdom 兼容性边界）
 - 加密估算 `estimateEncryptedSize(plainSize, chunkSize)` 5 例覆盖边界
+- archive 模块 11 例覆盖魔数识别 / ZIP 往返 / 切片过滤 / 命名建议
