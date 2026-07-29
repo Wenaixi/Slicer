@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useAppState } from '../lib/store'
 import { DropZone } from './DropZone'
 import { FileCard } from './FileCard'
@@ -42,6 +42,23 @@ export function SplitPanel() {
   useEffect(() => {
     abortRef.current = false
   }, [file, options.encrypt])
+
+  // 全局拖拽：window drop 事件路由到当前 Tab
+  const handleGlobalDrop = useCallback((files: File[]) => {
+    if (files.length === 0) return
+    setFile(files[0])
+    setResults([])
+    toast(`已加载 ${files[0].name}`, 'success')
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ files: File[] }>).detail
+      if (tab === 'split' && detail?.files) handleGlobalDrop(detail.files)
+    }
+    window.addEventListener('slicer:global-drop', handler)
+    return () => window.removeEventListener('slicer:global-drop', handler)
+  }, [tab, handleGlobalDrop])
 
   if (tab !== 'split') return null
 
@@ -310,17 +327,29 @@ export function SplitPanel() {
           </div>
 
           {/* 执行按钮 */}
-          <button
-            onClick={executeSplit}
-            disabled={!canExecute}
-            className={`w-full py-3.5 font-bold text-sm transition-fast pressable flex items-center justify-center gap-2 ${
-              canExecute
-                ? 'bg-zinc-100 text-zinc-950 hover:bg-white light:bg-zinc-900 light:text-zinc-50 light:hover:bg-zinc-800'
-                : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-            }`}
-          >
-            {processing ? '处理中…' : options.encrypt ? '加密并分割' : '立即分割'}
-          </button>
+          <div className="space-y-3">
+            <button
+              onClick={executeSplit}
+              disabled={!canExecute}
+              className={`w-full py-3.5 font-bold text-sm transition-fast pressable flex items-center justify-center gap-2 ${
+                canExecute
+                  ? 'bg-zinc-100 text-zinc-950 hover:bg-white light:bg-zinc-900 light:text-zinc-50 light:hover:bg-zinc-800'
+                  : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+              }`}
+            >
+              {processing ? '处理中…' : options.encrypt ? '加密并分割' : '立即分割'}
+            </button>
+            {processing && (
+              <button
+                onClick={() => {
+                  abortRef.current = true
+                }}
+                className="w-full py-2 text-xs font-mono text-zinc-400 hover:text-zinc-200 light:hover:text-zinc-700 border border-zinc-800 light:border-zinc-300 transition-fast pressable"
+              >
+                取消任务
+              </button>
+            )}
+          </div>
 
           {processing && (
             <ProgressBar value={progress} label={progressLabel} detail={`${progress.toFixed(1)}%`} />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useAppState } from '../lib/store'
 import { DropZone } from './DropZone'
 import { PasswordPanel } from './PasswordPanel'
@@ -28,9 +28,8 @@ export function MergePanel() {
 
   const groups: MergeGroup[] = useMemo(() => groupMergeFiles(files), [files])
 
-  if (tab !== 'merge') return null
-
-  const addFiles = (incoming: File[]) => {
+  // 全局拖拽：window drop 事件路由到合并 Tab
+  const handleGlobalDrop = useCallback((incoming: File[]) => {
     if (incoming.length === 0) return
     const seen = new Set(files.map(fileDedupKey))
     let added = 0
@@ -50,7 +49,37 @@ export function MergePanel() {
       return next
     })
     if (added > 0) toast(`已追加 ${added} 个切片`, 'success')
-    else toast('文件已在队列中（按名称+大小+时间去重）', 'info')
+  }, [files])
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ files: File[] }>).detail
+      if (tab === 'merge' && detail?.files) handleGlobalDrop(detail.files)
+    }
+    window.addEventListener('slicer:global-drop', handler)
+    return () => window.removeEventListener('slicer:global-drop', handler)
+  }, [tab, handleGlobalDrop])
+
+  if (tab !== 'merge') return null
+
+  const addFiles = (incoming: File[]) => {
+    if (incoming.length === 0) return
+    setFiles((prev) => {
+      const seen = new Set(prev.map(fileDedupKey))
+      const next = [...prev]
+      let added = 0
+      for (const f of incoming) {
+        const key = fileDedupKey(f)
+        if (!seen.has(key)) {
+          seen.add(key)
+          next.push(f)
+          added++
+        }
+      }
+      if (added > 0) toast(`已追加 ${added} 个切片`, 'success')
+      else toast('文件已在队列中（按名称+大小+时间去重）', 'info')
+      return next
+    })
   }
 
   const removeFile = (name: string) => {
@@ -63,13 +92,13 @@ export function MergePanel() {
   }
 
   const removeGroup = (baseName: string) => {
-    setFiles((prev) => {
-      const remaining = prev.filter((f) => {
+    setFiles((prev) =>
+      prev.filter((f) => {
+        // 单个文件归组后判断 baseName 是否属于目标组
         const g = groupMergeFiles([f])
         return g.length === 0 || g[0].baseName !== baseName
-      })
-      return remaining
-    })
+      }),
+    )
   }
 
   const executeMerge = async (group: MergeGroup) => {

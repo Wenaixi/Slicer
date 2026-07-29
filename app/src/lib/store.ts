@@ -1,6 +1,5 @@
-// 应用全局状态（zustand 之外，不引依赖：用 useSyncExternalStore 手写即可？）
-// 但切片/合并两块状态相对独立且组件树浅，直接用 React useState + props 更清晰。
-// 这里只保留主题与全局拖拽这类真正的全局状态。
+// 应用全局状态（主题/Tab/全局拖拽遮罩）。
+// 手写 useSyncExternalStore，避免引入 Redux/Zustand 等依赖。
 
 import { useSyncExternalStore } from 'react';
 
@@ -12,6 +11,8 @@ type Listener = () => void;
 interface AppState {
   theme: Theme;
   tab: AppTab;
+  /** 全屏拖拽悬停（window 级 dragenter 计数 > 0 时置真） */
+  globalDragging: boolean;
 }
 
 let state: AppState = {
@@ -19,6 +20,7 @@ let state: AppState = {
     ? 'light'
     : 'dark',
   tab: 'split',
+  globalDragging: false,
 };
 
 const listeners = new Set<Listener>();
@@ -47,6 +49,12 @@ export function toggleTheme(): void {
 
 export function setTab(tab: AppTab): void {
   state = { ...state, tab };
+  emit();
+}
+
+export function setGlobalDragging(dragging: boolean): void {
+  if (state.globalDragging === dragging) return;
+  state = { ...state, globalDragging: dragging };
   emit();
 }
 

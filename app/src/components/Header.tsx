@@ -28,15 +28,20 @@ export function Header() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <kbd className="font-mono px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300 text-zinc-400">
-            {tab === 'split' ? 'M' : 'S'}
-          </kbd>
-          <span className="text-zinc-500 font-mono">快捷键</span>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex items-center gap-2 text-xs font-mono text-zinc-500" aria-hidden="true">
+            <span>快捷键</span>
+            <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">S</kbd>
+            <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">M</kbd>
+            <span className="opacity-50">/</span>
+            <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">←</kbd>
+            <kbd className="px-1.5 py-0.5 border border-zinc-700 light:border-zinc-300">→</kbd>
+            <span className="ml-1 text-zinc-400">当前: {tab === 'split' ? '分割' : '合并'}</span>
+          </div>
           <button
             onClick={toggleTheme}
             className="ml-2 px-3 py-1.5 border border-zinc-800 hover:border-zinc-600 light:border-zinc-300 light:hover:border-zinc-500 transition-fast pressable font-mono flex items-center gap-2"
-            aria-label="切换主题"
+            aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
           >
             {theme === 'dark' ? (
               <>
