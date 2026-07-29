@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from '../lib/toast'
 import { passwordStrength, STRENGTH_LABEL } from '../lib/utils'
+import { generatePassword } from '../lib/password-gen'
 
 interface PasswordPanelProps {
   password: string
@@ -30,14 +31,32 @@ export function PasswordPanel({
         <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-400">
           {decryptMode ? '// 解密密码' : '// 加密密码设置'}
         </h3>
-        <button
-          type="button"
-          onClick={() => setShow((s) => !s)}
-          className="text-xs text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-700 font-mono transition-fast"
-          aria-label={show ? '隐藏密码' : '显示密码'}
-        >
-          {show ? '隐藏' : '显示'}
-        </button>
+        <div className="flex items-center gap-3">
+          {!decryptMode && (
+            <button
+              type="button"
+              onClick={() => {
+                const pw = generatePassword({ length: 16 })
+                onPasswordChange(pw)
+                onConfirmChange(pw)
+                setShow(true)
+                toast('已生成强随机密码（仅保存在内存，请自行记录）', 'success')
+              }}
+              className="text-xs text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-700 font-mono transition-fast underline underline-offset-2"
+              aria-label="生成强随机密码"
+            >
+              生成强密码
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShow((s) => !s)}
+            className="text-xs text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-700 font-mono transition-fast"
+            aria-label={show ? '隐藏密码' : '显示密码'}
+          >
+            {show ? '隐藏' : '显示'}
+          </button>
+        </div>
       </div>
 
       <div className={`grid gap-4 ${decryptMode ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}`}>

@@ -16,9 +16,16 @@ interface AppState {
 }
 
 let state: AppState = {
-  theme: (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches)
-    ? 'light'
-    : 'dark',
+  theme: (() => {
+    // 优先读 localStorage 记忆，再 fallback 系统偏好
+    try {
+      const saved = localStorage.getItem('slicer:theme') as Theme | null
+      if (saved === 'light' || saved === 'dark') return saved
+    } catch {}
+    return (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches)
+      ? 'light'
+      : 'dark'
+  })(),
   tab: 'split',
   globalDragging: false,
 };
@@ -40,6 +47,9 @@ function getSnapshot(): AppState {
 
 export function setTheme(theme: Theme): void {
   state = { ...state, theme };
+  try {
+    localStorage.setItem('slicer:theme', theme);
+  } catch {}
   emit();
 }
 

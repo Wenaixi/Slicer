@@ -5,20 +5,10 @@ import { FileCard } from './FileCard'
 import { PasswordPanel } from './PasswordPanel'
 import { ProgressBar } from './ProgressBar'
 import { toast } from '../lib/toast'
-import { formatBytes, downloadBlob, nextFrame } from '../lib/utils'
+import { formatBytes, downloadBlob } from '../lib/utils'
 import { estimateEncryptSeconds, formatEstimateSeconds } from '../lib/perf'
-import {
-  DEFAULT_SPLIT_OPTIONS,
-  computeChunkPlan,
-  buildChunkName,
-  encryptedChunkName,
-  type SplitOptions,
-} from '../lib/split'
-import {
-  generateSalt,
-  deriveKeyFromPassword,
-  encryptChunkWithKey,
-} from '../lib/crypto'
+import { streamSplit, estimateEncryptedSize } from '../lib/stream-split'
+import { DEFAULT_SPLIT_OPTIONS, computeChunkPlan, type SplitOptions } from '../lib/split'
 
 interface ChunkResult {
   name: string
@@ -67,9 +57,8 @@ export function SplitPanel() {
     ? computeChunkPlan(file.size, options)
     : { chunkSize: 0, totalParts: 0 }
 
-  const totalOutSizeApprox = options.encrypt
-    ? // 加密输出 = 100B 头 + 68B stanza + ceil(N / chunkSize) * (4 + chunkSize + 16)
-      100 + 68 + Math.ceil(file?.size ?? 0 / Math.max(1, plan.chunkSize)) * (4 + plan.chunkSize + 16)
+  const totalOutSizeApprox = options.encrypt && file
+    ? estimateEncryptedSize(file.size, plan.chunkSize)
     : file?.size ?? 0
 
   const canExecute =
@@ -105,67 +94,41 @@ export function SplitPanel() {
     abortRef.current = false
 
     try {
-      const { chunkSize, totalParts } = computeChunkPlan(file.size, options)
-
-      // 加密：先派生密钥（Argon2id 耗时操作，一次性完成）
-      let fileKey: Uint8Array | null = null
-      let salt: Uint8Array | null = null
-      if (options.encrypt) {
-        setProgressLabel('Argon2id 派生密钥…')
-        salt = await generateSalt()
-        fileKey = await deriveKeyFromPassword(options.password, salt)
-        await nextFrame()
-      }
-
       const chunks: ChunkResult[] = []
-      let start = 0
-      let index = 1
+      const summary = await streamSplit(file, options, {
+        shouldAbort: () => abortRef.current,
+        onChunk: (chunk) => {
+          chunks.push({
+            name: chunk.name,
+            blob: chunk.blob,
+            size: chunk.blob.size,
+            index: chunk.index,
+            encrypted: options.encrypt,
+          })
+        },
+        onProgress: (p) => {
+          setProgress((p.bytesDone / Math.max(1, p.bytesTotal)) * 100)
+          setProgressLabel(
+            p.phase === 'derive'
+              ? 'Argon2id 派生密钥…'
+              : p.phase === 'encrypt'
+              ? `加密切片 ${p.index}/${p.total}`
+              : `切片 ${p.index}/${p.total}`,
+          )
+        },
+      })
 
-      while (start < file.size) {
-        if (abortRef.current) {
-          toast('已取消分割', 'info')
-          setProcessing(false)
-          return
-        }
-
-        const end = Math.min(start + chunkSize, file.size)
-        const blob = file.slice(start, end)
-        const bytes = new Uint8Array(await blob.arrayBuffer())
-
-        let outName = buildChunkName(file.name, index, totalParts, options.naming)
-        let outBlob: Blob
-
-        if (options.encrypt && fileKey && salt) {
-          const cipher = await encryptChunkWithKey(bytes, fileKey, salt)
-          outName = encryptedChunkName(outName)
-          // 显式转成 ArrayBuffer，规避 SharedArrayBuffer 类型不兼容
-          outBlob = new Blob([cipher.slice().buffer as ArrayBuffer], { type: 'application/octet-stream' })
-        } else {
-          outBlob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'application/octet-stream' })
-        }
-
-        chunks.push({
-          name: outName,
-          blob: outBlob,
-          size: outBlob.size,
-          index,
-          encrypted: options.encrypt,
-        })
-
-        start = end
-        index++
-        const pct = (start / file.size) * 100
-        setProgress(pct)
-        setProgressLabel(`切片 ${index - 1}/${totalParts}`)
-        await nextFrame() // 让出主线程，保持 UI 响应
+      if (abortRef.current) {
+        toast('已取消分割', 'info')
+        return
       }
-
-      // 用完立即擦除密钥
-      if (fileKey) fileKey.fill(0)
-
       setResults(chunks)
-      toast(`已分割为 ${chunks.length} 个切片${options.encrypt ? '（已加密）' : ''}`, 'success')
+      toast(`已分割为 ${summary.totalParts} 个切片${summary.encrypted ? '（已加密）' : ''}`, 'success')
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        toast('已取消分割', 'info')
+        return
+      }
       console.error(err)
       toast(err instanceof Error ? err.message : '分割失败', 'error')
     } finally {
