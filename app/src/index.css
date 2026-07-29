@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@custom-variant light (&:where(.light, .light *));
+
+/*
+  设计基调：黑白极简 + Apple 流体细节
+  - 圆角克制：仅交互元素（按钮/输入/卡片）用 6-10px 圆角
+  - 动效：全部走 transform/opacity，duration <= 250ms，ease-out 为主
+  - 字体：系统等宽 + 系统无衬线，遵循 Apple 字体规范（大标题负字距）
+*/
+
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+html {
+  font: 100%/1.5 ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* 大标题负字距（Apple typography：大字号收紧字距） */
+.tracking-display {
+  letter-spacing: -0.03em;
+}
+
+/* 滚动条：细、克制 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+.light ::-webkit-scrollbar-thumb { background: #d4d4d8; }
+
+/* 选择文本反色 */
+::selection { background: #fafafa; color: #09090b; }
+.light ::selection { background: #18181b; color: #fafafa; }
+
+/* 通用过渡：只允许 transform/opacity/颜色，杜绝 transition: all */
+.transition-fast {
+  transition:
+    transform 160ms var(--ease-out),
+    opacity 160ms var(--ease-out),
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+/* 按钮按压反馈（Apple：pointer-down 立即响应） */
+.pressable:active {
+  transform: scale(0.97);
+}
+
+/* 拖拽遮罩进入 */
+.drag-overlay-enter {
+  animation: dragOverlayIn 180ms var(--ease-out) both;
+}
+@keyframes dragOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Toast 进入/退出（同一路径：底部滑入滑出，CSS transition 可中断） */
+.toast-item {
+  transition:
+    transform 220ms var(--ease-out),
+    opacity 220ms var(--ease-out);
+}
+.toast-enter {
+  transform: translateY(12px);
+  opacity: 0;
+}
+.toast-leave {
+  transform: translateY(8px);
+  opacity: 0;
+}
+
+/* 进度条流动（恒定运动用 linear） */
+@keyframes progressStripes {
+  from { background-position: 0 0; }
+  to { background-position: 40px 0; }
+}
+.progress-animated {
+  background-image: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.18) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.18) 50%,
+    rgba(255, 255, 255, 0.18) 75%,
+    transparent 75%,
+    transparent
+  );
+  background-size: 40px 40px;
+  animation: progressStripes 0.9s linear infinite;
+}
+.light .progress-animated {
+  background-image: linear-gradient(
+    45deg,
+    rgba(0, 0, 0, 0.12) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(0, 0, 0, 0.12) 50%,
+    rgba(0, 0, 0, 0.12) 75%,
+    transparent 75%,
+    transparent
+  );
+}
+
+/* 状态指示点脉冲 */
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot {
+  animation: pulseDot 1.6s var(--ease-in-out) infinite;
+}
+
+/* 减少动态偏好（Apple：交叉淡化替代位移） */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 触屏设备禁用 hover 变换（避免误触粘滞） */
+@media (hover: none) {
+  .pressable:hover { transform: none; }
+}

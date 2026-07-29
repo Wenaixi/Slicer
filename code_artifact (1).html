@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SLICER - 轻量高性能文件分割与合并 (GPU加速版)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        mono: {
+                            50: '#fafafa',
+                            100: '#f4f4f5',
+                            200: '#e4e4e7',
+                            300: '#d4d4d8',
+                            400: '#a1a1aa',
+                            500: '#71717a',
+                            600: '#52525b',
+                            700: '#3f3f46',
+                            800: '#27272a',
+                            900: '#18181b',
+                            950: '#09090b',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbars & smooth rendering */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #52525b;
+            border-radius: 3px;
+        }
+        .dark ::-webkit-scrollbar-thumb {
+            background: #27272a;
+        }
+        
+        /* GPU Acceleration Utility Classes */
+        .gpu-accelerated {
+            transform: translateZ(0);
+            backface-visibility: hidden;
+            perspective: 1000px;
+            will-change: transform, opacity;
+        }
+
+        .drag-active {
+            border-color: #ffffff !important;
+            background-color: rgba(255, 255, 255, 0.05) !important;
+        }
+        .light .drag-active {
+            border-color: #09090b !important;
+            background-color: rgba(0, 0, 0, 0.05) !important;
+        }
+        
+        .transition-fast {
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* Pulse glow overlay */
+        @keyframes pulseGlow {
+            0%, 100% { opacity: 0.8; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.02); }
+        }
+        .animate-pulse-glow {
+            animation: pulseGlow 2s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-mono-950 text-mono-100 min-h-screen font-sans antialiased transition-colors duration-200 selection:bg-mono-100 selection:text-mono-950 light:bg-mono-50 light:text-mono-900 relative overflow-x-hidden">
+
+    <!-- GLOBAL WINDOW DRAG OVERLAY (GPU ACCELERATED) -->
+    <div id="globalDropOverlay" class="fixed inset-0 z-50 bg-mono-950/90 light:bg-mono-50/90 backdrop-blur-md hidden flex flex-col items-center justify-center border-4 border-dashed border-mono-200 light:border-mono-800 m-4 rounded-3xl pointer-events-none gpu-accelerated transition-all duration-200">
+        <div class="p-6 bg-mono-900 light:bg-mono-100 rounded-2xl shadow-2xl border border-mono-700 light:border-mono-300 flex flex-col items-center gap-4 text-center max-w-sm animate-pulse-glow">
+            <div class="w-16 h-16 rounded-full bg-mono-100 text-mono-950 light:bg-mono-900 light:text-mono-50 flex items-center justify-center font-bold">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+            </div>
+            <div>
+                <p class="text-lg font-bold font-mono">释放文件即可添加</p>
+                <p class="text-xs text-mono-400 light:text-mono-600 mt-1" id="globalDropHint">将自动导入到当前模式</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN APP CONTAINER -->
+    <div class="max-w-5xl mx-auto px-4 py-8 md:py-12">
+        <!-- Header Section -->
+        <header class="flex flex-col md:flex-row md:items-center justify-between pb-8 mb-8 border-b border-mono-800 light:border-mono-200 gap-4">
+            <div>
+                <div class="flex items-center space-x-3">
+                    <span class="p-2 bg-mono-100 text-mono-950 dark:bg-mono-100 dark:text-mono-950 rounded-lg font-mono font-black tracking-tighter text-xl shadow-lg">
+                        //
+                    </span>
+                    <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight font-mono uppercase">
+                        SLICER <span class="text-xs font-normal px-2 py-0.5 border border-mono-700 rounded text-mono-400 ml-2">PRO v2.1 GPU</span>
+                    </h1>
+                </div>
+                <p class="text-mono-400 text-sm mt-1 light:text-mono-600 flex items-center gap-2">
+                    <span>纯本地GPU流式处理</span>
+                    <span>·</span>
+                    <span>数据隐私零泄漏</span>
+                    <span>·</span>
+                    <span class="hidden sm:inline-block px-1.5 py-0.5 bg-mono-800 light:bg-mono-200 rounded text-[11px] font-mono">键盘 ← / → 快捷切模式</span>
+                </p>
+            </div>
+
+            <!-- Header Controls -->
+            <div class="flex items-center space-x-3">
+                <!-- Hotkey indicator badge -->
+                <div class="hidden md:flex items-center space-x-1 text-[11px] font-mono text-mono-400 bg-mono-900 light:bg-mono-100 px-3 py-1.5 rounded-lg border border-mono-800 light:border-mono-200">
+                    <span class="px-1.5 py-0.5 bg-mono-800 light:bg-mono-200 rounded text-mono-200 light:text-mono-800">←</span>
+                    <span class="px-1.5 py-0.5 bg-mono-800 light:bg-mono-200 rounded text-mono-200 light:text-mono-800">→</span>
+                    <span>切换模式</span>
+                </div>
+
+                <!-- Theme Switcher -->
+                <button id="themeToggleBtn" onclick="toggleTheme()" class="px-3 py-1.5 border border-mono-800 hover:border-mono-600 dark:border-mono-800 dark:hover:border-mono-600 rounded-lg text-xs font-mono flex items-center gap-2 transition-fast light:border-mono-300">
+                    <svg id="themeIconDark" class="w-4 h-4 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                    <svg id="themeIconLight" class="w-4 h-4 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+                    <span id="themeLabel">暗黑模式</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Mode Navigation Tabs -->
+        <div class="flex border-b border-mono-800 light:border-mono-200 mb-8 font-mono text-sm">
+            <button id="tabSplitBtn" onclick="switchTab('split')" class="px-6 py-3 border-b-2 border-mono-100 font-bold text-mono-100 flex items-center gap-2 transition-fast light:border-mono-900 light:text-mono-900">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h6a2 2 0 012 2v2M8 7H6a2 2 0 00-2 2v6a2 2 0 002 2h2m0 0k0 0"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 11l4-4m0 0l-4-4m4 4H10"></path></svg>
+                文件分割 (Split)
+                <span class="text-[10px] opacity-60 font-normal">[←键]</span>
+            </button>
+            <button id="tabMergeBtn" onclick="switchTab('merge')" class="px-6 py-3 border-b-2 border-transparent text-mono-400 hover:text-mono-200 flex items-center gap-2 transition-fast light:text-mono-500 light:hover:text-mono-800">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                切片合并 (Merge)
+                <span id="mergeBadge" class="hidden px-1.5 py-0.2 bg-emerald-500 text-mono-950 text-[10px] font-bold rounded-full">0</span>
+                <span class="text-[10px] opacity-60 font-normal">[→键]</span>
+            </button>
+        </div>
+
+        <!-- SECTION 1: SPLIT FILE -->
+        <section id="sectionSplit" class="space-y-6 gpu-accelerated">
+            <!-- Drop Zone for Split -->
+            <div id="splitDropZone" onclick="splitFileInput.click()" class="border-2 border-dashed border-mono-800 hover:border-mono-500 rounded-2xl p-8 md:p-12 text-center bg-mono-900/50 light:bg-mono-100/50 light:border-mono-300 light:hover:border-mono-400 transition-fast cursor-pointer relative group gpu-accelerated">
+                <input type="file" id="splitFileInput" class="hidden" onchange="handleSplitFileSelect(event)">
+                <div class="space-y-4 pointer-events-none">
+                    <div class="w-16 h-16 mx-auto rounded-full bg-mono-800/80 light:bg-mono-200 flex items-center justify-center text-mono-300 light:text-mono-700 group-hover:scale-105 transition-transform">
+                        <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    </div>
+                    <div>
+                        <p class="text-base font-semibold">拖拽单文件到全屏任意位置，或 <span class="underline underline-offset-4 font-mono">点击浏览选择</span></p>
+                        <p class="text-xs text-mono-400 mt-1">支持任何格式（大文件镜像、视频、文档包），本地GPU极速分割</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Split Options (Hidden by default until file chosen) -->
+            <div id="splitPanel" class="hidden space-y-6 gpu-accelerated">
+                <!-- Selected File Info Card -->
+                <div class="bg-mono-900 border border-mono-800 light:bg-white light:border-mono-200 rounded-xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div class="flex items-center space-x-4">
+                        <div class="p-3 bg-mono-800 light:bg-mono-100 rounded-lg font-mono text-xs font-bold uppercase" id="splitFileExt">
+                            FILE
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-mono-100 light:text-mono-900 truncate max-w-md" id="splitFileName">filename.ext</h3>
+                            <p class="text-xs text-mono-400 mt-0.5 font-mono" id="splitFileSize">0 MB</p>
+                        </div>
+                    </div>
+                    <button onclick="resetSplit()" class="text-xs text-mono-400 hover:text-mono-100 light:hover:text-mono-900 font-mono underline">重新选择文件</button>
+                </div>
+
+                <!-- Split Configuration Panel -->
+                <div class="bg-mono-900 border border-mono-800 light:bg-white light:border-mono-200 rounded-xl p-6 space-y-6">
+                    <h2 class="text-sm font-mono uppercase tracking-wider text-mono-400 font-semibold">// 分割参数配置</h2>
+
+                    <!-- Split Mode Selector -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label class="border border-mono-800 light:border-mono-200 p-4 rounded-xl flex items-center space-x-3 cursor-pointer bg-mono-950/40 light:bg-mono-50 hover:border-mono-600 transition-colors">
+                            <input type="radio" name="splitMode" value="size" checked onchange="updateSplitModeUI()" class="accent-mono-100">
+                            <div>
+                                <div class="text-sm font-bold">按固定单文件大小分割</div>
+                                <div class="text-xs text-mono-400">指定每个切片文件的最大容量</div>
+                            </div>
+                        </label>
+                        <label class="border border-mono-800 light:border-mono-200 p-4 rounded-xl flex items-center space-x-3 cursor-pointer bg-mono-950/40 light:bg-mono-50 hover:border-mono-600 transition-colors">
+                            <input type="radio" name="splitMode" value="count" onchange="updateSplitModeUI()" class="accent-mono-100">
+                            <div>
+                                <div class="text-sm font-bold">按目标份数平均分割</div>
+                                <div class="text-xs text-mono-400">自动计算每份大小以切分为固定数量</div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <!-- Mode Inputs -->
+                    <div class="space-y-4">
+                        <!-- Mode 1: By Size Input -->
+                        <div id="splitBySizeConfig" class="space-y-3">
+                            <label class="text-xs text-mono-400 font-mono">单个切片限制大小：</label>
+                            <div class="flex gap-2">
+                                <input type="number" id="splitSizeValue" value="20" min="0.01" step="any" oninput="calculateSplitPreview()" class="flex-1 bg-mono-950 border border-mono-800 light:bg-mono-50 light:border-mono-300 rounded-lg px-4 py-2 text-sm font-mono focus:outline-none focus:border-mono-400">
+                                <select id="splitSizeUnit" onchange="calculateSplitPreview()" class="bg-mono-950 border border-mono-800 light:bg-mono-50 light:border-mono-300 rounded-lg px-4 py-2 text-sm font-mono focus:outline-none focus:border-mono-400">
+                                    <option value="MB" selected>MB</option>
+                                    <option value="GB">GB</option>
+                                    <option value="KB">KB</option>
+                                </select>
+                            </div>
+                            <!-- Quick Preset Buttons -->
+                            <div class="flex flex-wrap gap-2 pt-1">
+                                <span class="text-xs text-mono-400 font-mono self-center mr-1">快捷预设:</span>
+                                <button onclick="setSplitPreset(10, 'MB')" class="px-2.5 py-1 bg-mono-800 light:bg-mono-200 hover:bg-mono-700 text-xs rounded font-mono transition-colors">10MB (微信限制)</button>
+                                <button onclick="setSplitPreset(25, 'MB')" class="px-2.5 py-1 bg-mono-800 light:bg-mono-200 hover:bg-mono-700 text-xs rounded font-mono transition-colors">25MB (邮箱限制)</button>
+                                <button onclick="setSplitPreset(100, 'MB')" class="px-2.5 py-1 bg-mono-800 light:bg-mono-200 hover:bg-mono-700 text-xs rounded font-mono transition-colors">100MB (标准网盘)</button>
+                                <button onclick="setSplitPreset(1, 'GB')" class="px-2.5 py-1 bg-mono-800 light:bg-mono-200 hover:bg-mono-700 text-xs rounded font-mono transition-colors">1GB (大文件包)</button>
+                            </div>
+                        </div>
+
+                        <!-- Mode 2: By Count Input -->
+                        <div id="splitByCountConfig" class="hidden space-y-3">
+                            <label class="text-xs text-mono-400 font-mono">计划切割份数：</label>
+                            <input type="number" id="splitCountValue" value="5" min="2" max="500" oninput="calculateSplitPreview()" class="w-full bg-mono-950 border border-mono-800 light:bg-mono-50 light:border-mono-300 rounded-lg px-4 py-2 text-sm font-mono focus:outline-none focus:border-mono-400">
+                        </div>
+
+                        <!-- Naming Rules -->
+                        <div class="pt-2">
+                            <label class="text-xs text-mono-400 font-mono block mb-2">切片后缀命名规范：</label>
+                            <select id="namingPatternSelect" onchange="calculateSplitPreview()" class="w-full bg-mono-950 border border-mono-800 light:bg-mono-50 light:border-mono-300 rounded-lg px-4 py-2 text-sm font-mono focus:outline-none focus:border-mono-400">
+                                <option value="part">原文件名.ext.part1, 原文件名.ext.part2 (通用标准)</option>
+                                <option value="number">原文件名.ext.001, 原文件名.ext.002 (分卷档案)</option>
+                                <option value="infix">原文件名_part1.ext, 原文件名_part2.ext (保留后缀)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Humanized Preview Card -->
+                    <div class="border-t border-mono-800 light:border-mono-200 pt-4 flex items-center justify-between font-mono text-xs text-mono-300 light:text-mono-600">
+                        <div>预计生成切片：<span id="previewPartCount" class="font-bold text-mono-100 light:text-mono-900 text-sm">0</span> 个</div>
+                        <div>预估单个大小：<span id="previewPartSize" class="font-bold text-mono-100 light:text-mono-900 text-sm">0 MB</span></div>
+                    </div>
+
+                    <!-- Execute Button -->
+                    <button id="startSplitBtn" onclick="executeSplit()" class="w-full py-3.5 bg-mono-100 text-mono-950 hover:bg-white light:bg-mono-900 light:text-mono-50 light:hover:bg-mono-800 font-bold rounded-xl transition-fast flex items-center justify-center gap-2 text-sm shadow-lg gpu-accelerated">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                        立即开始分割切片
+                    </button>
+                </div>
+
+                <!-- Output Results Section -->
+                <div id="splitResults" class="hidden bg-mono-900 border border-mono-800 light:bg-white light:border-mono-200 rounded-xl p-6 space-y-4 gpu-accelerated">
+                    <div class="flex items-center justify-between">
+                        <h3 class="font-mono text-sm uppercase tracking-wider text-mono-300 font-bold flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                            切片分割完成 (共 <span id="outputCountText">0</span> 个文件)
+                        </h3>
+                        <button onclick="downloadAllChunks()" class="px-4 py-1.5 bg-mono-100 text-mono-950 hover:bg-mono-200 light:bg-mono-900 light:text-mono-50 text-xs font-mono font-bold rounded-lg transition-colors flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                            一键逐个下载全部切片
+                        </button>
+                    </div>
+
+                    <div id="chunkListContainer" class="space-y-2 max-h-80 overflow-y-auto pr-1">
+                        <!-- Chunk elements injected here -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECTION 2: MERGE FILES -->
+        <section id="sectionMerge" class="hidden space-y-6 gpu-accelerated">
+            <!-- Drop Zone for Merge -->
+            <div id="mergeDropZone" onclick="mergeFileInput.click()" class="border-2 border-dashed border-mono-800 hover:border-mono-500 rounded-2xl p-8 md:p-12 text-center bg-mono-900/50 light:bg-mono-100/50 light:border-mono-300 light:hover:border-mono-400 transition-fast cursor-pointer relative group gpu-accelerated">
+                <input type="file" id="mergeFileInput" multiple class="hidden" onchange="handleMergeFilesSelect(event)">
+                <div class="space-y-4 pointer-events-none">
+                    <div class="w-16 h-16 mx-auto rounded-full bg-mono-800/80 light:bg-mono-200 flex items-center justify-center text-mono-300 light:text-mono-700 group-hover:scale-105 transition-transform">
+                        <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    </div>
+                    <div>
+                        <p class="text-base font-semibold">拖拽切片文件到全屏任意位置，或 <span class="underline underline-offset-4 font-mono">点击批量选择</span></p>
+                        <p class="text-xs text-mono-400 mt-1">智能分析：支持分批多次追加，系统将根据文件名特征自动拼合</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Merge Control & Matching Area -->
+            <div id="mergePanel" class="hidden space-y-6 gpu-accelerated">
+                <!-- Bar for Adding More Files / Summary -->
+                <div class="bg-mono-900 border border-mono-800 light:bg-white light:border-mono-200 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div class="flex items-center space-x-3">
+                        <span class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <div class="font-mono text-xs">
+                            <span class="text-mono-100 light:text-mono-900 font-bold" id="totalMergeFilesCount">已载入 0 个切片文件</span>
+                            <span class="text-mono-400 ml-2">（支持直接将更多文件拖到屏幕任意位置）</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-2 w-full sm:w-auto">
+                        <!-- Append More Files Button -->
+                        <button onclick="mergeFileInput.click()" class="flex-1 sm:flex-none px-4 py-2 bg-mono-800 hover:bg-mono-700 light:bg-mono-200 light:hover:bg-mono-300 text-mono-100 light:text-mono-900 text-xs font-mono font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                            继续追加切片
+                        </button>
+                        <button onclick="clearMergeFiles()" class="px-3 py-2 text-xs font-mono text-mono-400 hover:text-mono-100 light:hover:text-mono-900 underline">
+                            清空重来
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Group Cards Container -->
+                <div id="mergeGroupsContainer" class="space-y-4">
+                    <!-- Dynamically populated group cards -->
+                </div>
+            </div>
+        </section>
+
+        <!-- Security & Performance Footnote -->
+        <footer class="mt-16 pt-8 border-t border-mono-800/60 light:border-mono-200 grid grid-cols-1 md:grid-cols-3 gap-6 text-xs text-mono-400 light:text-mono-500 font-mono">
+            <div class="flex items-start space-x-3">
+                <span class="text-mono-100 dark:text-mono-100 font-bold">01.</span>
+                <p><strong class="text-mono-200 light:text-mono-800">GPU 硬件加速：</strong>视图渲染与内存指针零开销拼接，即使数百个切片同步合并也不卡顿。</p>
+            </div>
+            <div class="flex items-start space-x-3">
+                <span class="text-mono-100 dark:text-mono-100 font-bold">02.</span>
+                <p><strong class="text-mono-200 light:text-mono-800">全屏无缝拖拽：</strong>支持在页面任意位置直接释放文件，自动智能分流到当前操作板块。</p>
+            </div>
+            <div class="flex items-start space-x-3">
+                <span class="text-mono-100 dark:text-mono-100 font-bold">03.</span>
+                <p><strong class="text-mono-200 light:text-mono-800">增量分段注入：</strong>修复合并模式追加逻辑，支持跨目录、多批次多次导入去重拼合。</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="fixed bottom-6 right-6 z-50 space-y-2 pointer-events-none gpu-accelerated"></div>
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+        // Core State
+        let currentTab = 'split';
+        let splitFile = null;
+        let generatedChunks = [];
+        let mergeFilesList = []; // Accumulates uploaded merge files
+        let dragCounter = 0; // Fixes dragenter/dragleave flicker
+
+        // DOM References
+        const globalDropOverlay = document.getElementById('globalDropOverlay');
+        const globalDropHint = document.getElementById('globalDropHint');
+        const splitDropZone = document.getElementById('splitDropZone');
+        const splitFileInput = document.getElementById('splitFileInput');
+        const splitPanel = document.getElementById('splitPanel');
+        const mergeDropZone = document.getElementById('mergeDropZone');
+        const mergeFileInput = document.getElementById('mergeFileInput');
+        const mergePanel = document.getElementById('mergePanel');
+
+        // 1. GLOBAL DRAG AND DROP (ANYWHERE ON PAGE)
+        window.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dragCounter++;
+            globalDropOverlay.classList.remove('hidden');
+            globalDropHint.innerText = currentTab === 'split' ? '释放以载入待分割文件' : '释放以追加合并切片';
+        });
+
+        window.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        window.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter <= 0) {
+                dragCounter = 0;
+                globalDropOverlay.classList.add('hidden');
+            }
+        });
+
+        window.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dragCounter = 0;
+            globalDropOverlay.classList.add('hidden');
+
+            const files = Array.from(e.dataTransfer.files);
+            if (files.length === 0) return;
+
+            if (currentTab === 'split') {
+                setSplitFile(files[0]);
+            } else {
+                addMergeFiles(files);
+            }
+        });
+
+        // 2. KEYBOARD ARROW KEYS MODE SWITCHING (← / →)
+        window.addEventListener('keydown', (e) => {
+            // Do not switch tab if user is currently inside an input field
+            const activeEl = document.activeElement;
+            const isInputActive = activeEl && (
+                activeEl.tagName === 'INPUT' || 
+                activeEl.tagName === 'TEXTAREA' || 
+                activeEl.tagName === 'SELECT'
+            );
+            if (isInputActive) return;
+
+            if (e.key === 'ArrowLeft') {
+                switchTab('split');
+            } else if (e.key === 'ArrowRight') {
+                switchTab('merge');
+            }
+        });
+
+        function toggleTheme() {
+            const html = document.documentElement;
+            if (html.classList.contains('dark')) {
+                html.classList.remove('dark');
+                html.classList.add('light');
+                document.getElementById('themeLabel').innerText = '明亮模式';
+            } else {
+                html.classList.remove('light');
+                html.classList.add('dark');
+                document.getElementById('themeLabel').innerText = '暗黑模式';
+            }
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `pointer-events-auto px-4 py-3 rounded-xl shadow-2xl border text-xs font-mono flex items-center space-x-2 transition-all transform translate-y-2 opacity-0 bg-mono-900 border-mono-700 text-mono-100 light:bg-mono-100 light:border-mono-300 light:text-mono-900 gpu-accelerated`;
+            
+            const icon = type === 'success' 
+                ? '<svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>'
+                : '<svg class="w-4 h-4 text-mono-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>';
+
+            toast.innerHTML = `${icon}<span>${message}</span>`;
+            container.appendChild(toast);
+
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            });
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 200);
+            }, 3000);
+        }
+
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            const splitBtn = document.getElementById('tabSplitBtn');
+            const mergeBtn = document.getElementById('tabMergeBtn');
+            const splitSec = document.getElementById('sectionSplit');
+            const mergeSec = document.getElementById('sectionMerge');
+
+            if (tab === 'split') {
+                splitBtn.className = "px-6 py-3 border-b-2 border-mono-100 font-bold text-mono-100 flex items-center gap-2 transition-fast light:border-mono-900 light:text-mono-900";
+                mergeBtn.className = "px-6 py-3 border-b-2 border-transparent text-mono-400 hover:text-mono-200 flex items-center gap-2 transition-fast light:text-mono-500 light:hover:text-mono-800";
+                splitSec.classList.remove('hidden');
+                mergeSec.classList.add('hidden');
+            } else {
+                mergeBtn.className = "px-6 py-3 border-b-2 border-mono-100 font-bold text-mono-100 flex items-center gap-2 transition-fast light:border-mono-900 light:text-mono-900";
+                splitBtn.className = "px-6 py-3 border-b-2 border-transparent text-mono-400 hover:text-mono-200 flex items-center gap-2 transition-fast light:text-mono-500 light:hover:text-mono-800";
+                mergeSec.classList.remove('hidden');
+                splitSec.classList.add('hidden');
+            }
+        }
+
+        function handleSplitFileSelect(e) {
+            if (e.target.files.length > 0) {
+                setSplitFile(e.target.files[0]);
+            }
+        }
+
+        function setSplitFile(file) {
+            splitFile = file;
+            const ext = file.name.split('.').pop().toUpperCase();
+            document.getElementById('splitFileExt').innerText = ext.length < 5 ? ext : 'FILE';
+            document.getElementById('splitFileName').innerText = file.name;
+            document.getElementById('splitFileSize').innerText = formatBytes(file.size);
+
+            splitDropZone.classList.add('hidden');
+            splitPanel.classList.remove('hidden');
+            document.getElementById('splitResults').classList.add('hidden');
+
+            calculateSplitPreview();
+            showToast('已加载文件：' + file.name, 'success');
+        }
+
+        function resetSplit() {
+            splitFile = null;
+            generatedChunks = [];
+            splitFileInput.value = '';
+            splitPanel.classList.add('hidden');
+            splitDropZone.classList.remove('hidden');
+        }
+
+        function updateSplitModeUI() {
+            const mode = document.querySelector('input[name="splitMode"]:checked').value;
+            const bySizeConfig = document.getElementById('splitBySizeConfig');
+            const byCountConfig = document.getElementById('splitByCountConfig');
+
+            if (mode === 'size') {
+                bySizeConfig.classList.remove('hidden');
+                byCountConfig.classList.add('hidden');
+            } else {
+                bySizeConfig.classList.add('hidden');
+                byCountConfig.classList.remove('hidden');
+            }
+            calculateSplitPreview();
+        }
+
+        function setSplitPreset(val, unit) {
+            document.getElementById('splitSizeValue').value = val;
+            document.getElementById('splitSizeUnit').value = unit;
+            calculateSplitPreview();
+        }
+
+        function calculateSplitPreview() {
+            if (!splitFile) return;
+
+            const mode = document.querySelector('input[name="splitMode"]:checked').value;
+            let totalParts = 0;
+            let partSizeBytes = 0;
+
+            if (mode === 'size') {
+                const val = parseFloat(document.getElementById('splitSizeValue').value) || 1;
+                const unit = document.getElementById('splitSizeUnit').value;
+                let multiplier = 1024 * 1024; // MB default
+                if (unit === 'KB') multiplier = 1024;
+                if (unit === 'GB') multiplier = 1024 * 1024 * 1024;
+
+                partSizeBytes = val * multiplier;
+                if (partSizeBytes <= 0) partSizeBytes = 1024;
+                totalParts = Math.ceil(splitFile.size / partSizeBytes);
+            } else {
+                const count = parseInt(document.getElementById('splitCountValue').value) || 2;
+                totalParts = Math.max(2, count);
+                partSizeBytes = Math.ceil(splitFile.size / totalParts);
+            }
+
+            document.getElementById('previewPartCount').innerText = totalParts;
+            document.getElementById('previewPartSize').innerText = formatBytes(partSizeBytes);
+        }
+
+        function executeSplit() {
+            if (!splitFile) return;
+
+            const mode = document.querySelector('input[name="splitMode"]:checked').value;
+            let chunkSize = 0;
+
+            if (mode === 'size') {
+                const val = parseFloat(document.getElementById('splitSizeValue').value) || 1;
+                const unit = document.getElementById('splitSizeUnit').value;
+                let multiplier = 1024 * 1024;
+                if (unit === 'KB') multiplier = 1024;
+                if (unit === 'GB') multiplier = 1024 * 1024 * 1024;
+                chunkSize = val * multiplier;
+            } else {
+                const count = parseInt(document.getElementById('splitCountValue').value) || 2;
+                chunkSize = Math.ceil(splitFile.size / Math.max(2, count));
+            }
+
+            if (chunkSize <= 0) chunkSize = 1024 * 1024;
+
+            const pattern = document.getElementById('namingPatternSelect').value;
+            const totalChunks = Math.ceil(splitFile.size / chunkSize);
+            generatedChunks = [];
+
+            let start = 0;
+            let index = 1;
+
+            while (start < splitFile.size) {
+                const end = Math.min(start + chunkSize, splitFile.size);
+                const chunkBlob = splitFile.slice(start, end);
+                
+                let chunkName = '';
+                const zeroPaddedIndex = String(index).padStart(String(totalChunks).length > 2 ? String(totalChunks).length : 3, '0');
+
+                if (pattern === 'part') {
+                    chunkName = `${splitFile.name}.part${index}`;
+                } else if (pattern === 'number') {
+                    chunkName = `${splitFile.name}.${zeroPaddedIndex}`;
+                } else if (pattern === 'infix') {
+                    const dotIdx = splitFile.name.lastIndexOf('.');
+                    if (dotIdx !== -1) {
+                        const nameBase = splitFile.name.substring(0, dotIdx);
+                        const ext = splitFile.name.substring(dotIdx);
+                        chunkName = `${nameBase}_part${index}${ext}`;
+                    } else {
+                        chunkName = `${splitFile.name}_part${index}`;
+                    }
+                }
+
+                generatedChunks.push({
+                    name: chunkName,
+                    blob: chunkBlob,
+                    size: chunkBlob.size,
+                    index: index
+                });
+
+                start = end;
+                index++;
+            }
+
+            renderSplitResults();
+            showToast(`成功切割为 ${generatedChunks.length} 个分卷`, 'success');
+        }
+
+        function renderSplitResults() {
+            const resultsDiv = document.getElementById('splitResults');
+            const container = document.getElementById('chunkListContainer');
+            document.getElementById('outputCountText').innerText = generatedChunks.length;
+            container.innerHTML = '';
+
+            generatedChunks.forEach((chunk) => {
+                const item = document.createElement('div');
+                item.className = 'flex items-center justify-between p-3 bg-mono-950 border border-mono-800 light:bg-mono-50 light:border-mono-200 rounded-lg text-xs font-mono';
+                item.innerHTML = `
+                    <div class="flex items-center space-x-3 truncate">
+                        <span class="px-2 py-0.5 bg-mono-800 light:bg-mono-200 text-mono-300 light:text-mono-700 rounded text-[10px]">#${chunk.index}</span>
+                        <span class="truncate font-semibold text-mono-200 light:text-mono-800">${chunk.name}</span>
+                        <span class="text-mono-400 text-[11px]">(${formatBytes(chunk.size)})</span>
+                    </div>
+                    <button onclick="downloadChunk(${chunk.index - 1})" class="px-3 py-1 bg-mono-800 hover:bg-mono-700 light:bg-mono-200 light:hover:bg-mono-300 text-mono-100 light:text-mono-900 rounded transition-colors flex items-center gap-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                        下载
+                    </button>
+                `;
+                container.appendChild(item);
+            });
+
+            resultsDiv.classList.remove('hidden');
+        }
+
+        function downloadChunk(index) {
+            const chunk = generatedChunks[index];
+            if (!chunk) return;
+            const url = URL.createObjectURL(chunk.blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = chunk.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        function downloadAllChunks() {
+            if (generatedChunks.length === 0) return;
+            showToast(`开始下载全部 ${generatedChunks.length} 个切片...`, 'info');
+            generatedChunks.forEach((chunk, i) => {
+                setTimeout(() => {
+                    downloadChunk(i);
+                }, i * 250);
+            });
+        }
+
+        // 3. FILE MERGING WITH DEDUPLICATION AND ACCUMULATION (FIXED BUG)
+        function handleMergeFilesSelect(e) {
+            if (e.target.files.length > 0) {
+                addMergeFiles(Array.from(e.target.files));
+                e.target.value = ''; // Clear file input so same file selection re-triggers
+            }
+        }
+
+        function addMergeFiles(newFiles) {
+            let addedCount = 0;
+            newFiles.forEach(file => {
+                // Deduplicate by filename, size, and lastModified
+                const isDuplicate = mergeFilesList.some(
+                    existing => existing.name === file.name && 
+                                existing.size === file.size && 
+                                existing.lastModified === file.lastModified
+                );
+                if (!isDuplicate) {
+                    mergeFilesList.push(file);
+                    addedCount++;
+                }
+            });
+
+            if (addedCount > 0) {
+                showToast(`已追加 ${addedCount} 个切片`, 'success');
+            } else {
+                showToast('未选择新切片或已在队列中', 'info');
+            }
+
+            processMergeMatching();
+        }
+
+        function removeMergeFile(fileName) {
+            mergeFilesList = mergeFilesList.filter(f => f.name !== fileName);
+            if (mergeFilesList.length === 0) {
+                clearMergeFiles();
+            } else {
+                processMergeMatching();
+            }
+        }
+
+        function removeMergeGroup(encodedBaseName) {
+            const baseName = decodeURIComponent(encodedBaseName);
+            mergeFilesList = mergeFilesList.filter(f => {
+                const parsed = parseChunkFileName(f.name);
+                return parsed.baseName !== baseName;
+            });
+
+            if (mergeFilesList.length === 0) {
+                clearMergeFiles();
+            } else {
+                processMergeMatching();
+                showToast(`已移除分组 [${baseName}]`, 'info');
+            }
+        }
+
+        function clearMergeFiles() {
+            mergeFilesList = [];
+            mergeFileInput.value = '';
+            mergePanel.classList.add('hidden');
+            mergeDropZone.classList.remove('hidden');
+            document.getElementById('mergeBadge').classList.add('hidden');
+        }
+
+        function processMergeMatching() {
+            if (mergeFilesList.length === 0) {
+                clearMergeFiles();
+                return;
+            }
+
+            mergeDropZone.classList.add('hidden');
+            mergePanel.classList.remove('hidden');
+
+            // Update Badge Count
+            const badge = document.getElementById('mergeBadge');
+            badge.innerText = mergeFilesList.length;
+            badge.classList.remove('hidden');
+
+            document.getElementById('totalMergeFilesCount').innerText = `已载入 ${mergeFilesList.length} 个切片文件`;
+
+            // Parse file groups
+            const groups = {};
+
+            mergeFilesList.forEach(file => {
+                const parsed = parseChunkFileName(file.name);
+                if (!groups[parsed.baseName]) {
+                    groups[parsed.baseName] = [];
+                }
+                groups[parsed.baseName].push({
+                    file: file,
+                    index: parsed.partIndex,
+                    originalName: file.name
+                });
+            });
+
+            // Sort chunks numerically inside each group
+            Object.keys(groups).forEach(base => {
+                groups[base].sort((a, b) => {
+                    if (a.index !== null && b.index !== null) {
+                        return a.index - b.index;
+                    }
+                    return a.originalName.localeCompare(b.originalName, undefined, { numeric: true, sensitivity: 'base' });
+                });
+            });
+
+            renderMergeGroups(groups);
+        }
+
+        /* Smart Parser for split filenames */
+        function parseChunkFileName(filename) {
+            // Pattern 1: name.ext.part1 / name.ext.part01
+            let match = filename.match(/^(.*?)\.part(\d+)$/i);
+            if (match) {
+                return { baseName: match[1], partIndex: parseInt(match[2], 10) };
+            }
+
+            // Pattern 2: name.ext.001 / name.ext.01
+            match = filename.match(/^(.*?)\.(\d{3,4})$/i);
+            if (match) {
+                return { baseName: match[1], partIndex: parseInt(match[2], 10) };
+            }
+
+            // Pattern 3: name_part1.ext
+            match = filename.match(/^(.*?)_part(\d+)(\.[^.]+)?$/i);
+            if (match) {
+                const ext = match[3] || '';
+                return { baseName: match[1] + ext, partIndex: parseInt(match[2], 10) };
+            }
+
+            // Default fallback
+            return { baseName: filename.replace(/\.(part\d+|\d{3,})$/i, ''), partIndex: null };
+        }
+
+        function renderMergeGroups(groups) {
+            const container = document.getElementById('mergeGroupsContainer');
+            container.innerHTML = '';
+
+            Object.keys(groups).forEach(baseName => {
+                const items = groups[baseName];
+                const totalSize = items.reduce((acc, cur) => acc + cur.file.size, 0);
+
+                // Check continuity
+                let isSequential = true;
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].index !== null && items[i].index !== i + 1) {
+                        isSequential = false;
+                        break;
+                    }
+                }
+
+                const card = document.createElement('div');
+                card.className = 'bg-mono-900 border border-mono-800 light:bg-white light:border-mono-200 rounded-xl p-6 space-y-4 gpu-accelerated';
+
+                let chunkListHtml = items.map((item, idx) => `
+                    <div class="flex items-center justify-between text-xs font-mono p-2 bg-mono-950 light:bg-mono-50 border border-mono-800 light:border-mono-200 rounded group/item">
+                        <div class="flex items-center space-x-2 truncate">
+                            <span class="text-mono-400 font-bold">#${idx + 1}</span>
+                            <span class="truncate text-mono-200 light:text-mono-800">${item.originalName}</span>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span class="text-mono-400">${formatBytes(item.file.size)}</span>
+                            <button onclick="removeMergeFile('${item.originalName.replace(/'/g, "\\'")}')" title="移除此切片" class="text-mono-500 hover:text-red-400 font-bold px-1">
+                                ✕
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+
+                card.innerHTML = `
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-mono-800 light:border-mono-200 pb-4">
+                        <div>
+                            <div class="flex items-center space-x-2">
+                                <h3 class="font-bold text-mono-100 light:text-mono-900 font-mono text-sm truncate max-w-md">${baseName}</h3>
+                                ${!isSequential ? '<span class="px-2 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] rounded font-mono">可能缺少分卷/序号不连续</span>' : '<span class="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] rounded font-mono">切片序列完整</span>'}
+                            </div>
+                            <p class="text-xs text-mono-400 font-mono mt-1">包含 ${items.length} 个切片 · 总容量: ${formatBytes(totalSize)}</p>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <button onclick="removeMergeGroup('${encodeURIComponent(baseName)}')" class="px-3 py-2 text-xs font-mono text-mono-400 hover:text-red-400 border border-mono-800 light:border-mono-200 hover:border-red-500/30 rounded-lg transition-colors">
+                                删除此组
+                            </button>
+                            <button onclick="executeMerge('${encodeURIComponent(baseName)}')" class="px-5 py-2.5 bg-mono-100 text-mono-950 hover:bg-white light:bg-mono-900 light:text-mono-50 font-bold font-mono text-xs rounded-lg transition-colors shadow flex items-center justify-center gap-1.5 gpu-accelerated">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                                合并并下载
+                            </button>
+                        </div>
+                    </div>
+                    <div class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                        ${chunkListHtml}
+                    </div>
+                `;
+
+                // Store list reference globally
+                window[`group_${encodeURIComponent(baseName)}`] = items;
+
+                container.appendChild(card);
+            });
+        }
+
+        function executeMerge(encodedBaseName) {
+            const items = window[`group_${encodedBaseName}`];
+            const originalBaseName = decodeURIComponent(encodedBaseName);
+
+            if (!items || items.length === 0) return;
+
+            showToast('正在合并二进制文件...', 'info');
+
+            // Zero-copy Blob array merge
+            const blobs = items.map(item => item.file);
+            const mergedBlob = new Blob(blobs, { type: 'application/octet-stream' });
+
+            // Trigger immediate local download
+            const url = URL.createObjectURL(mergedBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = originalBaseName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+            showToast('合并成功！已开始文件下载', 'success');
+        }
+    </script>
+</body>
+</html>
