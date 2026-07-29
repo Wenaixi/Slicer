@@ -17,6 +17,9 @@ import {
   clearProgress,
   type SplitProgress,
 } from '../lib/resume'
+import { broadcastProgress, subscribeProgress, type CrossTabProgressEvent } from '../lib/cross-tab'
+import { createMeter, recordChunk, estimateEtaSeconds, type ProgressMeter } from '../lib/progress-meter'
+import { useVirtualWindow } from '../lib/virtualize'
 
 interface ChunkResult {
   name: string
@@ -39,6 +42,8 @@ export function SplitPanel() {
   const [resumeMode, setResumeMode] = useState(false)
   const [completedIndices, setCompletedIndices] = useState<Set<number>>(new Set())
   const [resumableSaved, setResumableSaved] = useState<SplitProgress | null>(null)
+  const [crossTabEvent, setCrossTabEvent] = useState<CrossTabProgressEvent | null>(null)
+  const [meter, setMeter] = useState<ProgressMeter | null>(null)
   const abortRef = useRef(false)
 
   // 重置进度与中止标记当文件或选项变化
@@ -55,6 +60,18 @@ export function SplitPanel() {
       setResumableSaved(null)
     }
   }, [file?.size, options.sizeValue])
+
+  // 订阅其他 Tab 的分割进度（跨标签实时同步）
+  useEffect(() => {
+    const unsub = subscribeProgress((e) => {
+      setCrossTabEvent(e)
+      // 其他 Tab 完成/取消时清掉提示
+      if (e.kind === 'split-done' || e.kind === 'split-abort') {
+        // 事件已存进 state 即可，组件里再判断是否显示
+      }
+    })
+    return unsub
+  }, [])
 
   const resumeInterrupt = () => {
     if (!resumableSaved) return
@@ -166,6 +183,19 @@ export function SplitPanel() {
     const completedSet = new Set<number>(completedIndices)
     const startTime = Date.now()
     let lastSave = 0
+    const totalParts = plan.totalParts
+    let meterState = createMeter(file.size)
+    setMeter(meterState)
+
+    // 启动时把进度广播给其他 Tab
+    broadcastProgress({
+      kind: resumeMode ? 'split-resume' : 'split-start',
+      fileName: file.name,
+      fileSize: file.size,
+      completedIndices: [...completedSet],
+      totalParts,
+      timestamp: Date.now(),
+    })
 
     const chunks: ChunkResult[] = []
     try {
@@ -209,6 +239,15 @@ export function SplitPanel() {
                 startedAt: startTime,
                 updatedAt: now,
               })
+              // 同步广播到其他 Tab
+              broadcastProgress({
+                kind: 'split-progress',
+                fileName: file.name,
+                fileSize: file.size,
+                completedIndices: [...completedSet],
+                totalParts,
+                timestamp: now,
+              })
               lastSave = now
             }
           },
@@ -223,6 +262,9 @@ export function SplitPanel() {
                 ? `跳过已完成 ${p.index}/${p.total}`
                 : `切片 ${p.index}/${p.total}`,
             )
+            // 仪表采样（每切片一次）
+            meterState = recordChunk(meterState, p.phase === 'skip' ? 0 : (p.bytesDone - meterState.bytesDone), { skipped: p.phase === 'skip' })
+            setMeter(meterState)
           },
         },
         { skipIndices },
@@ -238,6 +280,14 @@ export function SplitPanel() {
           startedAt: startTime,
           updatedAt: Date.now(),
         })
+        broadcastProgress({
+          kind: 'split-abort',
+          fileName: file.name,
+          fileSize: file.size,
+          completedIndices: [...completedSet],
+          totalParts,
+          timestamp: Date.now(),
+        })
         toast(`已取消（已保存 ${completedSet.size} 个切片进度，下次可续传）`, 'info')
         return
       }
@@ -246,6 +296,14 @@ export function SplitPanel() {
       clearProgress()
       setCompletedIndices(new Set())
       setResumeMode(false)
+      broadcastProgress({
+        kind: 'split-done',
+        fileName: file.name,
+        fileSize: file.size,
+        completedIndices: [...completedSet],
+        totalParts,
+        timestamp: Date.now(),
+      })
       toast(
         dirHandle
           ? `已逐切片写入磁盘（${summary.totalParts} 个${summary.skippedParts ? `，跳过 ${summary.skippedParts} 个续传切片` : ''}）`
@@ -322,6 +380,20 @@ export function SplitPanel() {
         />
       ) : (
         <>
+          {/* 跨标签进度共享提示：其他 Tab 正在分割同一文件 */}
+          {crossTabEvent && crossTabEvent.fileSize === file.size && crossTabEvent.fileName === file.name && !processing && (
+            <div className="border border-blue-500/30 bg-blue-500/5 light:bg-blue-50 p-3 text-xs font-mono text-blue-400 light:text-blue-700 flex items-center gap-2">
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5" />
+              </svg>
+              <span>
+                另一个标签页正在分割同一文件 · 已完成 {crossTabEvent.completedIndices.length}/{crossTabEvent.totalParts}
+                {crossTabEvent.kind === 'split-done' && ' · 对方已完成'}
+                {crossTabEvent.kind === 'split-abort' && ' · 对方已取消'}
+              </span>
+            </div>
+          )}
+
           {/* 续传恢复条 */}
           {resumableSaved && (
             <div className="border border-blue-500/30 bg-blue-500/5 light:bg-blue-50 p-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono">
@@ -549,68 +621,48 @@ export function SplitPanel() {
           </div>
 
           {processing && (
-            <ProgressBar value={progress} label={progressLabel} detail={`${progress.toFixed(1)}%`} />
+            <>
+              <ProgressBar value={progress} label={progressLabel} detail={`${progress.toFixed(1)}%`} />
+              {meter && (
+                <div className="border border-zinc-800 light:border-zinc-200 bg-zinc-900 light:bg-white p-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+                  <div>
+                    <div className="text-zinc-500">吞吐</div>
+                    <div className="text-zinc-100 light:text-zinc-900 font-bold">{meter.mbps.toFixed(1)} MB/s</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500">ETA</div>
+                    <div className="text-zinc-100 light:text-zinc-900 font-bold">
+                      {(() => {
+                        const eta = estimateEtaSeconds(meter)
+                        if (eta === null) return '计算中…'
+                        if (eta < 60) return `${eta.toFixed(0)}s`
+                        return `${Math.floor(eta / 60)}m ${Math.floor(eta % 60)}s`
+                      })()}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500">已处理</div>
+                    <div className="text-zinc-100 light:text-zinc-900 font-bold">{meter.handledParts} / {plan.totalParts}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500">已跳过</div>
+                    <div className="text-zinc-100 light:text-zinc-900 font-bold">{meter.skippedParts}</div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {/* 结果 */}
           {results.length > 0 && !processing && (
-            <div className="border border-zinc-800 light:border-zinc-200 bg-zinc-900 light:bg-white p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-mono uppercase tracking-wider flex items-center gap-2">
-                  <span className="w-2 h-2 bg-emerald-400 pulse-dot" />
-                  分割完成（共 {results.length} 个，{formatBytes(totalOutSize)}）
-                </h3>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={downloadZip}
-                    className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
-                    title="把所有切片打包成单个 ZIP 文件（合并端可直接拖入 ZIP 自动解压）"
-                  >
-                    打包 ZIP
-                  </button>
-                  <button
-                    onClick={downloadBundle}
-                    className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
-                    title="按顺序拼接为单文件下载"
-                  >
-                    打包下载
-                  </button>
-                  <button
-                    onClick={downloadAll}
-                    className="px-4 py-1.5 text-xs font-mono font-bold bg-zinc-100 text-zinc-950 light:bg-zinc-900 light:text-zinc-50 pressable transition-fast"
-                  >
-                    逐个下载全部
-                  </button>
-                </div>
-              </div>
-              <div className="max-h-80 overflow-y-auto space-y-1.5 pr-1">
-                {results.map((c, i) => (
-                  <div
-                    key={c.name + i}
-                    className="flex items-center justify-between px-3 py-2 border border-zinc-800 light:border-zinc-200 bg-zinc-950 light:bg-zinc-50 text-xs font-mono"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="px-1.5 py-0.5 bg-zinc-800 light:bg-zinc-200 text-zinc-400 text-[10px] shrink-0">
-                        #{c.index}
-                      </span>
-                      <span className="truncate">{c.name}</span>
-                      <span className="text-zinc-500 shrink-0">({formatBytes(c.size)})</span>
-                      {c.encrypted && (
-                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] shrink-0">
-                          加密
-                        </span>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => downloadChunk(i)}
-                      className="ml-2 px-3 py-1 border border-zinc-800 light:border-zinc-300 hover:border-zinc-600 text-zinc-300 light:text-zinc-700 transition-fast pressable shrink-0"
-                    >
-                      下载
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <VirtualizedResultList
+              results={results}
+              totalOutSize={totalOutSize}
+              onDownloadZip={downloadZip}
+              onDownloadBundle={downloadBundle}
+              onDownloadAll={downloadAll}
+              onDownloadChunk={downloadChunk}
+            />
           )}
         </>
       )}
@@ -650,5 +702,131 @@ function ModeCard({
       </div>
       <p className="text-xs text-zinc-500 mt-1">{desc}</p>
     </button>
+  )
+}
+
+/** 结果列表虚拟化：超过阈值（80）时启用 useVirtualWindow 只渲染可视区；小列表直接渲染 */
+function VirtualizedResultList({
+  results,
+  totalOutSize,
+  onDownloadZip,
+  onDownloadBundle,
+  onDownloadAll,
+  onDownloadChunk,
+}: {
+  results: ChunkResult[]
+  totalOutSize: number
+  onDownloadZip: () => void
+  onDownloadBundle: () => void
+  onDownloadAll: () => void
+  onDownloadChunk: (idx: number) => void
+}) {
+  const useVirtual = results.length > 80
+  const virtual = useVirtualWindow(results, {
+    rowHeight: 44, // 大致行高
+    overscan: 8,
+    viewportHeight: 320,
+  })
+
+  return (
+    <div className="border border-zinc-800 light:border-zinc-200 bg-zinc-900 light:bg-white p-5 space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h3 className="text-sm font-mono uppercase tracking-wider flex items-center gap-2">
+          <span className="w-2 h-2 bg-emerald-400 pulse-dot" />
+          分割完成（共 {results.length} 个，{formatBytes(totalOutSize)}）
+          {useVirtual && (
+            <span className="text-[10px] text-zinc-500 font-normal">
+              · 虚拟滚动（仅渲染 {virtual.endIndex - virtual.startIndex + 1} 行）
+            </span>
+          )}
+        </h3>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={onDownloadZip}
+            className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
+            title="把所有切片打包成单个 ZIP 文件（合并端可直接拖入 ZIP 自动解压）"
+          >
+            打包 ZIP
+          </button>
+          <button
+            onClick={onDownloadBundle}
+            className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
+            title="按顺序拼接为单文件下载"
+          >
+            打包下载
+          </button>
+          <button
+            onClick={onDownloadAll}
+            className="px-4 py-1.5 text-xs font-mono font-bold bg-zinc-100 text-zinc-950 light:bg-zinc-900 light:text-zinc-50 pressable transition-fast"
+          >
+            逐个下载全部
+          </button>
+        </div>
+      </div>
+
+      {useVirtual ? (
+        <div
+          ref={virtual.containerRef}
+          className="h-80 overflow-y-auto space-y-0 pr-1"
+          style={{ contain: 'strict' }}
+        >
+          <div style={{ height: virtual.paddingTop }} />
+          <div className="space-y-1.5">
+            {virtual.items.map((c, i) => {
+              const realIdx = virtual.startIndex + i
+              return (
+                <ResultRow
+                  key={c.name + realIdx}
+                  chunk={c}
+                  onDownload={() => onDownloadChunk(realIdx)}
+                />
+              )
+            })}
+          </div>
+          <div style={{ height: virtual.paddingBottom }} />
+        </div>
+      ) : (
+        <div className="max-h-80 overflow-y-auto space-y-1.5 pr-1">
+          {results.map((c, i) => (
+            <ResultRow
+              key={c.name + i}
+              chunk={c}
+              onDownload={() => onDownloadChunk(i)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ResultRow({
+  chunk,
+  onDownload,
+}: {
+  chunk: ChunkResult
+  onDownload: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2 border border-zinc-800 light:border-zinc-200 bg-zinc-950 light:bg-zinc-50 text-xs font-mono">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="px-1.5 py-0.5 bg-zinc-800 light:bg-zinc-200 text-zinc-400 text-[10px] shrink-0">
+          #{chunk.index}
+        </span>
+        <span className="truncate">{chunk.name}</span>
+        <span className="text-zinc-500 shrink-0">({formatBytes(chunk.size)})</span>
+        {chunk.encrypted && (
+          <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] shrink-0">
+            加密
+          </span>
+        )}
+      </div>
+      <button
+        onClick={onDownload}
+        className="ml-2 px-3 py-1 border border-zinc-800 light:border-zinc-300 hover:border-zinc-600 text-zinc-300 light:text-zinc-700 transition-fast pressable shrink-0"
+      >
+        下载
+      </button>
+    </div>
   )
 }

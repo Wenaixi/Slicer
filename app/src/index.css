@@ -168,3 +168,54 @@ html {
 @media (hover: none) {
   .pressable:hover { transform: none; }
 }
+
+/* ==== 响应式增强：apple-design §15 字体尺度 + §6 简洁即清晰 ==== */
+
+/* 移动端 (< 640px)：紧凑间距与字号微调 */
+@media (max-width: 639px) {
+  html {
+    font-size: 95%;
+  }
+  /* 大字号收紧字距在手机上更显著 */
+  .tracking-display {
+    letter-spacing: -0.04em;
+  }
+}
+
+/* 平板 (640-1023px)：过渡尺寸 */
+@media (min-width: 640px) and (max-width: 1023px) {
+  html {
+    font-size: 98%;
+  }
+}
+
+/* 大屏 (>= 1280px)：提升阅读基线 */
+@media (min-width: 1280px) {
+  html {
+    font-size: 100%;
+  }
+}
+
+/* 触屏目标最小尺寸（Apple HIG：44px） */
+@media (pointer: coarse) {
+  button, [role="button"], input, select, textarea, a {
+    min-height: 44px;
+  }
+  /* 压缩小尺寸按钮的内边距 */
+  .px-2\.5, .px-3 {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}
+
+/* 横屏小屏（手机横屏 / 嵌入式）适配：降低竖向 padding */
+@media (max-height: 480px) {
+  main {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+  }
+  header {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+}

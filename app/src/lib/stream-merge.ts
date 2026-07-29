@@ -1,8 +1,23 @@
 // 流式合并执行器：明文/加密两条路径统一接口，onPlainChunk 回调逐块交付，
 // 浏览器内存占用恒定 O(chunkSize)，可直写磁盘（File System Access API）。
 // 大文件（10GB+）也不会因为累加 chunks 数组而爆内存。
+// 解密错误用 classifyDecryptError 细分为「密码错误 vs 文件损坏」，调用方可据此兜底。
 
 import { isSealGoFile, decryptChunkWithPassword } from './crypto'
+import { classifyDecryptError, kindLabel, type ClassifiedError } from './decrypt-error'
+
+export class StreamMergeError extends Error {
+  originalName: string
+  classified: ClassifiedError
+  itemIndex: number
+
+  constructor(originalName: string, classified: ClassifiedError, itemIndex: number) {
+    super(`${originalName}: ${classified.message}`)
+    this.originalName = originalName
+    this.classified = classified
+    this.itemIndex = itemIndex
+  }
+}
 
 export interface StreamMergeHandlers {
   /** 产出一个明文块（Blob）；index 从 0 起 */
@@ -50,14 +65,27 @@ export async function streamMerge(
     if (options.encrypted) {
       const buf = new Uint8Array(await item.file.arrayBuffer())
       if (!isSealGoFile(buf)) {
-        throw new Error(`${item.originalName} 不是合法的 SealGo 加密文件`)
+        throw new StreamMergeError(item.originalName, {
+          kind: 'not-sealgo',
+          message: '不是合法的 SealGo 加密文件（缺少 SC01 魔数）',
+          hint: '只有以 .sc 结尾的加密切片才能解密',
+        }, i)
       }
       if (!options.password) {
-        throw new Error('请先输入密码')
+        throw new StreamMergeError(item.originalName, {
+          kind: 'wrong-password',
+          message: '请先输入密码',
+          hint: '解密需要密码',
+        }, i)
       }
-      plainBytes = await decryptChunkWithPassword(buf, options.password)
+      try {
+        plainBytes = await decryptChunkWithPassword(buf, options.password)
+      } catch (err) {
+        const classified = classifyDecryptError(buf, err)
+        throw new StreamMergeError(item.originalName, classified, i)
+      }
     } else {
-      // 明文：用 File.slice 取零拷贝引用即可，不读 arrayBuffer
+      // 明文：直接读 arrayBuffer（用 Uint8Array 统一接口）
       plainBytes = new Uint8Array(await item.file.arrayBuffer())
     }
 
@@ -74,3 +102,5 @@ export async function streamMerge(
 
   return { totalParts: total, mergedParts, totalOutSize: bytesDone }
 }
+
+export { kindLabel }

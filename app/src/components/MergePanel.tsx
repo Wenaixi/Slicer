@@ -7,8 +7,10 @@ import { toast } from '../lib/toast'
 import { formatBytes, downloadBlob } from '../lib/utils'
 import { groupMergeFiles, fileDedupKey, type MergeGroup } from '../lib/merge'
 import { pickSaveLocation, pickFolderAndCreateFile, supportsDirectorySave, supportsFsAccess } from '../lib/fs-access'
-import { streamMerge } from '../lib/stream-merge'
+import { streamMerge, StreamMergeError } from '../lib/stream-merge'
+import { kindLabel } from '../lib/decrypt-error'
 import { detectArchiveKind, unzipAll, filterChunkEntries } from '../lib/archive'
+import { useVirtualWindow } from '../lib/virtualize'
 
 /** webkit 文件夹拖入：把目录里的所有文件递归拉平成 File[]。非 WebKit 静默返回 [f]。 */
 async function flattenIfDirectory(file: File): Promise<File[]> {
@@ -85,9 +87,13 @@ async function expandIncoming(
             toast(`「${f.name}」里没有识别到切片文件`, 'info')
             continue
           }
-          // 把解压出来的字节包装成 File（保留原 ZIP 内的相对名作为 name）
+          // 保留 ZIP 内完整相对路径作为 name，让 groupMergeFiles 按目录前缀（= 原压缩包/文件夹）分组
+          // 这样多个 ZIP 同时拖入时，同 baseName 的切片会跨 ZIP 合并进同一组
           const newFiles: File[] = chunks.map((c) => {
-            const file = new File([c.data.buffer as ArrayBuffer], c.name, {
+            // 把 ZIP 内的相对路径中的目录分隔符替换成 .，并前缀 ZIP 文件基名
+            // 例如: archive.zip 里的 sub/a.part1 → archive.sub/a.part1（保留路径信息且不冲突）
+            const flatName = c.name.replace(/\//g, '.')
+            const file = new File([c.data.buffer as ArrayBuffer], flatName, {
               type: 'application/octet-stream',
             })
             return file
@@ -329,6 +335,17 @@ export function MergePanel() {
         toast('已取消', 'info')
         return
       }
+      // 解密错误分类提示：「密码错误 vs 文件损坏」
+      if (err instanceof StreamMergeError) {
+        const { classified, originalName } = err
+        const label = kindLabel(classified.kind)
+        // 用两条 toast：第一条强调类型，第二条给建议
+        toast(`[${label}] ${originalName}: ${classified.message}`, 'error', 4500)
+        if (classified.hint) {
+          toast(classified.hint, 'info', 6000)
+        }
+        return
+      }
       const msg = err instanceof Error ? err.message : '合并失败'
       toast(msg, 'error')
     } finally {
@@ -512,27 +529,96 @@ function GroupCard({
       </div>
 
       <div className="max-h-48 overflow-y-auto pr-1 space-y-1">
-        {group.items.map((it, idx) => (
-          <div
-            key={it.file.name + idx}
-            className="flex items-center justify-between px-3 py-2 border border-zinc-800 light:border-zinc-200 bg-zinc-950 light:bg-zinc-50 text-xs font-mono"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-zinc-500 shrink-0">#{idx + 1}</span>
-              <span className="truncate">{it.originalName}</span>
-              <span className="text-zinc-500 shrink-0">({formatBytes(it.file.size)})</span>
-            </div>
-            <button
-              onClick={() => onRemoveItem(it.originalName)}
-              disabled={disabled}
-              className="text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-700 font-bold px-2 transition-fast disabled:opacity-50"
-              aria-label={`移除 ${it.originalName}`}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
+        <GroupItemList group={group} disabled={disabled} onRemoveItem={onRemoveItem} />
       </div>
+    </div>
+  )
+}
+
+/** 组内切片列表：超过 30 行启用虚拟滚动（覆盖 500+ 切片组场景） */
+function GroupItemList({
+  group,
+  disabled,
+  onRemoveItem,
+}: {
+  group: MergeGroup
+  disabled: boolean
+  onRemoveItem: (name: string) => void
+}) {
+  const useVirtual = group.items.length > 30
+  const virtual = useVirtualWindow(group.items, {
+    rowHeight: 36,
+    overscan: 6,
+    viewportHeight: 192,
+  })
+
+  if (!useVirtual) {
+    return (
+      <>
+        {group.items.map((it, idx) => (
+          <GroupItemRow
+            key={it.file.name + idx}
+            item={it}
+            idx={idx}
+            disabled={disabled}
+            onRemove={() => onRemoveItem(it.originalName)}
+          />
+        ))}
+      </>
+    )
+  }
+  return (
+    <div
+      ref={virtual.containerRef}
+      className="max-h-48 overflow-y-auto space-y-0"
+      style={{ contain: 'strict' }}
+    >
+      <div style={{ height: virtual.paddingTop }} />
+      <div className="space-y-1">
+        {virtual.items.map((it, i) => {
+          const realIdx = virtual.startIndex + i
+          return (
+            <GroupItemRow
+              key={it.file.name + realIdx}
+              item={it}
+              idx={realIdx}
+              disabled={disabled}
+              onRemove={() => onRemoveItem(it.originalName)}
+            />
+          )
+        })}
+      </div>
+      <div style={{ height: virtual.paddingBottom }} />
+    </div>
+  )
+}
+
+function GroupItemRow({
+  item,
+  idx,
+  disabled,
+  onRemove,
+}: {
+  item: { file: File; originalName: string }
+  idx: number
+  disabled: boolean
+  onRemove: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2 border border-zinc-800 light:border-zinc-200 bg-zinc-950 light:bg-zinc-50 text-xs font-mono">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-zinc-500 shrink-0">#{idx + 1}</span>
+        <span className="truncate">{item.originalName}</span>
+        <span className="text-zinc-500 shrink-0">({formatBytes(item.file.size)})</span>
+      </div>
+      <button
+        onClick={onRemove}
+        disabled={disabled}
+        className="text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-700 font-bold px-2 transition-fast disabled:opacity-50"
+        aria-label={`移除 ${item.originalName}`}
+      >
+        ✕
+      </button>
     </div>
   )
 }
