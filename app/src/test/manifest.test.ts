@@ -94,6 +94,26 @@ describe('buildManifest / serialize / parse 往返', () => {
   it('parse 拒绝缺关键字段', () => {
     expect(parseManifest(JSON.stringify({ version: 1, originalName: 'a' }))).toBeNull()
   })
+
+  it('chunks 数组含 null 应返回 null', () => {
+    const bad = JSON.stringify({
+      version: 1,
+      originalName: 'x',
+      originalSize: 1,
+      chunks: [null],
+    })
+    expect(parseManifest(bad)).toBeNull()
+  })
+
+  it('chunks 数组条目 sha256 非 64 位小写十六进制应返回 null', () => {
+    const bad = JSON.stringify({
+      version: 1,
+      originalName: 'x',
+      originalSize: 1,
+      chunks: [{ name: 'a', size: 1, sha256: 'XYZ', index: 0 }],
+    })
+    expect(parseManifest(bad)).toBeNull()
+  })
 })
 
 describe('verifyChunksAgainstManifest', () => {

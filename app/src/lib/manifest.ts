@@ -106,6 +106,19 @@ export function parseManifest(text: string): SplitManifest | null {
     if (typeof obj.originalName !== 'string') return null;
     if (typeof obj.originalSize !== 'number') return null;
     if (!Array.isArray(obj.chunks)) return null;
+    if (
+      !obj.chunks.every(
+        (c) =>
+          c &&
+          typeof c.name === 'string' &&
+          typeof c.size === 'number' &&
+          typeof c.sha256 === 'string' &&
+          /^[0-9a-f]{64}$/.test(c.sha256) &&
+          typeof c.index === 'number',
+      )
+    ) {
+      return null;
+    }
     return obj as SplitManifest;
   } catch {
     return null;
