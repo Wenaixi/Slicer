@@ -114,9 +114,7 @@ jobs:
         # the sed patterns above are best-effort; verify with grep after
 
       - name: Build release APK (arm64 only)
-        run: |
-          cargo tauri android build --release \
-            --target aarch64-linux-android
+        run: cargo tauri android build --target aarch64-linux-android
 
       - name: Upload APK to release
         env:
