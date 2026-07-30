@@ -1,4 +1,5 @@
 import { formatBytes, fileExtBadge } from '../lib/utils'
+import { t } from '../lib/i18n'
 
 interface FileCardProps {
   name: string
@@ -36,7 +37,7 @@ export function FileCard({ name, size, onRemove, actionLabel, onAction, children
             onClick={onRemove}
             className="px-3 py-1.5 text-xs font-mono text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-700 underline underline-offset-2 transition-fast"
           >
-            移除
+            {t('fileCard.remove')}
           </button>
         )}
       </div>

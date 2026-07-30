@@ -277,6 +277,7 @@ export function MergePanel() {
                   await folderHandle!.write(blob)
                 } catch (err) {
                   console.error('写文件夹失败:', err)
+                  toast(t('merge.toast.folderFail'), 'error')
                 }
               })()
             } else if (fileHandle) {
@@ -285,6 +286,7 @@ export function MergePanel() {
                   await fileHandle!.write(blob)
                 } catch (err) {
                   console.error('写文件失败:', err)
+                  toast(t('merge.toast.fileFail'), 'error')
                 }
               })()
             } else {

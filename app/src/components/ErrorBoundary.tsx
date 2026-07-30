@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react'
+import { t } from '../lib/i18n'
 
 interface Props {
   children: ReactNode
@@ -28,15 +29,15 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="w-12 h-12 mx-auto grid place-items-center border-2 border-red-500/50 text-red-400 font-mono font-bold">
               !
             </div>
-            <h1 className="text-lg font-bold">应用出现异常</h1>
+            <h1 className="text-lg font-bold">{t('errorBoundary.title')}</h1>
             <p className="text-sm text-zinc-400 font-mono break-all">
-              {this.state.error?.message ?? '未知错误'}
+              {this.state.error?.message ?? t('errorBoundary.unknown')}
             </p>
             <button
               onClick={() => window.location.reload()}
               className="px-4 py-2 bg-zinc-100 text-zinc-950 font-mono text-sm pressable transition-fast"
             >
-              刷新页面
+              {t('errorBoundary.reload')}
             </button>
           </div>
         </div>

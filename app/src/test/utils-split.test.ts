@@ -3,7 +3,7 @@ import {
   formatBytes,
   fileExtBadge,
   passwordStrength,
-  STRENGTH_LABEL,
+  strengthLabels,
 } from '../lib/utils'
 import {
   computeChunkPlan,
@@ -71,9 +71,13 @@ describe('passwordStrength', () => {
   })
 
   it('标签映射完整', () => {
-    expect(STRENGTH_LABEL).toHaveLength(5)
-    expect(STRENGTH_LABEL[0]).toBe('非常弱')
-    expect(STRENGTH_LABEL[4]).toBe('非常强')
+    const zhLabels = strengthLabels('zh')
+    expect(zhLabels).toHaveLength(5)
+    expect(zhLabels[0]).toBe('非常弱')
+    expect(zhLabels[4]).toBe('非常强')
+    const enLabels = strengthLabels('en')
+    expect(enLabels[0]).toBe('Very weak')
+    expect(enLabels[4]).toBe('Very strong')
   })
 })
 

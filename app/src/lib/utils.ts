@@ -1,3 +1,5 @@
+import { tWithLocale, type Locale } from './i18n';
+
 // 通用工具
 
 /** 人类可读字节数格式化 */
@@ -44,7 +46,18 @@ export function passwordStrength(pw: string): number {
   return Math.min(4, score);
 }
 
-export const STRENGTH_LABEL = ['非常弱', '弱', '一般', '强', '非常强'] as const;
+export const STRENGTH_KEYS = [
+  'password.strength.veryWeak',
+  'password.strength.weak',
+  'password.strength.medium',
+  'password.strength.strong',
+  'password.strength.veryStrong',
+] as const
+
+/** 按当前 locale 返回 5 个强度标签。组件内 useLocale() 拿到 locale 后传入。 */
+export function strengthLabels(locale: Locale): readonly string[] {
+  return STRENGTH_KEYS.map((k) => tWithLocale(locale, k))
+}
 
 /** 等待一帧，让浏览器有机会渲染进度（长任务让出主线程） */
 export function nextFrame(): Promise<void> {

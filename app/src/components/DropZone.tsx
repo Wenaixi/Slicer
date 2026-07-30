@@ -1,4 +1,5 @@
 import { useState, type DragEvent, type ReactNode } from 'react'
+import { t } from '../lib/i18n'
 
 interface DropZoneProps {
   title: string
@@ -83,12 +84,12 @@ export function DropZone({ title, hint, onFiles, multiple = false, disabled = fa
           <p className="text-xs text-zinc-500">{hint}</p>
         </div>
         <span className="text-[11px] font-mono text-zinc-500 underline underline-offset-4">
-          点击浏览选择
+          {t('dropzone.clickToBrowse')}
         </span>
       </label>
       {dragging && (
         <div className="absolute inset-0 grid place-items-center bg-zinc-950/80 light:bg-white/80 backdrop-blur-sm drag-overlay-enter pointer-events-none">
-          <p className="font-mono text-sm">释放文件即可添加</p>
+          <p className="font-mono text-sm">{t('dropzone.dropToAdd')}</p>
         </div>
       )}
       {children}
