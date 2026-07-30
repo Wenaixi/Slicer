@@ -120,8 +120,39 @@ jobs:
       - name: Build debug APK
         run: cargo tauri android build --debug
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK to release
+        uses: softprops/action-gh-release@v2
         with:
-          name: slicer-android-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: warn
+          tag_name: ${{ github.ref_name }}
+          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          fail_on_unmatched_files: true
+
+  build-html-zip:
+    name: HTML portable .zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install npm deps
+        run: npm --prefix app ci
+
+      - name: Build static site
+        run: npm --prefix app run build
+
+      - name: Zip dist/ as portable HTML bundle
+        run: |
+          cd app/dist
+          zip -r slicer-html-portable.zip ./*
+
+      - name: Upload zip to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: app/dist/slicer-html-portable.zip
+          fail_on_unmatched_files: true
