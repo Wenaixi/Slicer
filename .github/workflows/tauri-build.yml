@@ -260,16 +260,15 @@ jobs:
           KS="$RUNNER_TEMP/keystore.jks"
           test -f "$KS" || { echo "::error::keystore missing at $KS"; exit 1; }
 
-          # 清洗 secret：去掉 CR/LF/空白/非 ASCII（gh secret 经 Windows 写入时常带 \r）
+          # 清洗 secret：只留 ASCII 字母数字（Windows 写入 secret 时常带 \r）
           ALIAS=$(printf '%s' "${ANDROID_KEY_ALIAS:-upload}" | tr -cd 'A-Za-z0-9._-')
           PASS=$(printf '%s' "${ANDROID_KEY_PASSWORD}" | tr -cd 'A-Za-z0-9')
           echo "alias_len=${#ALIAS} pass_len=${#PASS}"
           test -n "$PASS" || { echo "::error::empty password after ASCII strip"; exit 1; }
-          # apksigner 要 file: 形式更稳，避免 shell 引号
-          printf '%s' "$PASS" > "$RUNNER_TEMP/ks.pass"
-          printf '%s' "$ALIAS" > "$RUNNER_TEMP/ks.alias"
-          # 本地校验 keystore 能打开
-          keytool -list -keystore "$KS" -storetype PKCS12 -storepass:file "$RUNNER_TEMP/ks.pass" | head -5
+
+          # apksigner file: 会按行连续读；ks-pass 与 key-pass 各读一行，所以写两行
+          printf '%s\n%s\n' "$PASS" "$PASS" > "$RUNNER_TEMP/ks.pass"
+          keytool -list -keystore "$KS" -storetype PKCS12 -storepass "$PASS" | head -5
 
           mapfile -t apks < <(find src-tauri/gen/android -name '*.apk' -type f | sort)
           echo "APKs before sign:"
@@ -291,26 +290,34 @@ jobs:
             esac
             if "$BUILD_TOOLS/apksigner" verify --print-certs "$f" >/dev/null 2>&1; then
               echo "already signed: $base"
-              # 统一改名到非 unsigned
-              if [[ "$base" == *unsigned* ]]; then
-                cp -f "$f" "$out"
-              fi
+              if [[ "$base" == *unsigned* ]]; then cp -f "$f" "$out"; fi
               signed_any=1
               continue
             fi
             "$BUILD_TOOLS/zipalign" -f -p 4 "$f" "$aligned"
-            "$BUILD_TOOLS/apksigner" sign \
-              --ks "$KS" \
-              --ks-type PKCS12 \
-              --ks-pass "file:$RUNNER_TEMP/ks.pass" \
-              --ks-key-alias "$ALIAS" \
-              --key-pass "file:$RUNNER_TEMP/ks.pass" \
-              --out "$out" \
-              "$aligned"
+            # 优先 pass: 形式（同口令）；file: 双行作兜底
+            if ! "$BUILD_TOOLS/apksigner" sign \
+                --ks "$KS" \
+                --ks-type PKCS12 \
+                --ks-pass "pass:$PASS" \
+                --ks-key-alias "$ALIAS" \
+                --key-pass "pass:$PASS" \
+                --out "$out" \
+                "$aligned"
+            then
+              echo "pass: form failed, retry file: two-line"
+              "$BUILD_TOOLS/apksigner" sign \
+                --ks "$KS" \
+                --ks-type PKCS12 \
+                --ks-pass "file:$RUNNER_TEMP/ks.pass" \
+                --ks-key-alias "$ALIAS" \
+                --key-pass "file:$RUNNER_TEMP/ks.pass" \
+                --out "$out" \
+                "$aligned"
+            fi
             "$BUILD_TOOLS/apksigner" verify --verbose "$out"
             echo "signed -> $out"
             rm -f "$aligned"
-            # 删掉 unsigned 原件（若 out 不同）
             if [ "$f" != "$out" ]; then rm -f "$f"; fi
             signed_any=1
           done
