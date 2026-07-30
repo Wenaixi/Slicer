@@ -158,7 +158,7 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 - 前端测试：`cd app && npm test`（Vitest + jsdom）
 - Tauri 构建（Windows）：`cargo tauri build` → `.msi` + `nsis .exe`
 - Tauri 构建（Linux）：`cargo tauri build --config src-tauri/tauri.linux.conf.json` → `.deb` + `.AppImage`
-- Tauri 构建（Android）：`cargo tauri android build -- --apk`（需 JDK17 + Android SDK34 + NDK26；CI 自动）
+- Tauri 构建（Android）：`cargo tauri android build --apk --target aarch64 --split-per-abi`（需 JDK17 + Android SDK34 + NDK26；CI 自动；--target 用短名 aarch64 不是 rust triple）
 
 ### 4.2 提交规范
 
@@ -187,12 +187,19 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 - **壳位置**：`src-tauri/`（仓库根，与 `app/` 平级，单代码库三端）
 - **前端零改动**：除 `vite.config.ts` 加 `base: './'` 外，`app/src/` 业务代码零改；**不引** `@tauri-apps/api`（壳与前端单向依赖）
 - **Linux 特殊**：必须 `tauri-plugin-localhost` + `portpicker`，否则 `crypto.subtle` 不可用（WebKitGTK secure-context 限制）
-- **Android 特殊**：包名 `com.slicer.app`；`src-tauri/gen/android/` 入 git；签名用 GitHub Secrets
+- **Android 特殊**：包名 `com.slicer.app`；`src-tauri/gen/android/` 由 CI `android init` 生成（不入 git）；签名目前 debug keystore，正式发布需 GitHub Secrets 注入 release keystore
 - **CSP 红线**：`script-src 'self' 'wasm-unsafe-eval'`（Go wasm 必须）；`connect-src 'self' ipc: http://ipc.localhost`
-- **CI 流水线**：`.github/workflows/tauri-build.yml` 触发 `v*` tag push + `workflow_dispatch`，三个 job 并行互不阻塞
-  - `build-windows`（`windows-latest`）→ `.msi + .exe`，自动创建 GitHub Release draft
-  - `build-linux`（`ubuntu-22.04`）→ 装 `libwebkit2gtk-4.1-dev/libssl-dev/libgtk-3-dev/libayatana-appindicator3-dev/librsvg2-dev`，`args: --config src-tauri/tauri.linux.conf.json`
-  - `build-android`（`ubuntu-latest`）→ Rust target 四档 + Temurin JDK17 + `android-actions/setup-android@v3`（platforms;android-34 / build-tools;34.0.0 / ndk;26.1.10909125）+ `cargo tauri android init` + `cargo tauri android build -- --apk --debug` → `actions/upload-artifact@v4` 上传 APK
+- **CI 流水线**：`.github/workflows/tauri-build.yml` 触发 `v*` tag push + `workflow_dispatch`，四 job 并行
+  - `build-windows`（`windows-latest`）→ `.msi + NSIS .exe`，tauri-action 写 Release
+  - `build-linux`（`ubuntu-22.04`）→ 装 webkit2gtk-4.1 等，`configFile: src-tauri/tauri.linux.conf.json` → `.deb + .AppImage`
+  - `build-android`（`ubuntu-latest`）→ Rust target `aarch64-linux-android` + Temurin JDK17 + `android-actions/setup-android@v3`（platform-tools / platforms;android-34 / build-tools;34.0.0 / ndk;26.1.10909125）+ `cargo install tauri-cli` + `cargo tauri android init` + `cargo tauri android build --apk --target aarch64 --split-per-abi` → `gh release upload` 上传 arm64 APK
+  - `build-html-zip` → `npm run build` + zip `app/dist` → softprops 上传 portable HTML
+- **Android CLI 坑**（已踩）：
+  1. `--target` 合法值是短名 `aarch64`/`armv7`/`i686`/`x86_64`，**不是** rust triple `aarch64-linux-android`（会 invalid value）
+  2. `cargo tauri android build` **默认就是 release**，不要再加 `--release`（会 unexpected argument）
+  3. `android-actions/setup-android@v3` 的 `packages` 必须**单行空格分隔**，`package-list` 输入无效；多行 `|` 会被当成一个包名
+  4. 上传用 `find ... -print0 | xargs -0 gh release upload "${{ github.ref_name }}" --clobber`（glob 在 shell 不展开；tagName 不要再加 `v` 前缀）
+  5. universal debug 四 ABI ≈ 433MB；release + arm64 only + split-per-abi 目标 ≈ 30MB
 
 ## 6. 测试基线
 
