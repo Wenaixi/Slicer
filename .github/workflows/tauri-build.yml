@@ -113,10 +113,66 @@ jobs:
           sed -i 's|"com\.tauri\.dev"|"com.slicer.app"|g' src-tauri/gen/android/app/src/main/AndroidManifest.xml
         # the sed patterns above are best-effort; verify with grep after
 
+      # Maven Central 对 GitHub Actions 出口 IP 常返回 429；
+      # 强制 Gradle 优先走 Google GCS 镜像。
+      - name: Gradle use GCS Maven Central mirror
+        run: |
+          mkdir -p "$HOME/.gradle"
+          cat > "$HOME/.gradle/init.gradle" <<'EOF'
+          settingsEvaluated { settings ->
+            settings.pluginManagement.repositories {
+              // 插到最前：GCS 镜像优先于 mavenCentral / gradlePluginPortal
+              maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
+            }
+          }
+          allprojects {
+            buildscript {
+              repositories {
+                maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
+              }
+            }
+            repositories {
+              maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
+            }
+          }
+          EOF
+          # 项目 settings 也前置 GCS（android init 后一定存在）
+          SETTINGS="src-tauri/gen/android/settings.gradle"
+          if [ -f "$SETTINGS" ] && ! grep -q 'maven-central.storage-download.googleapis.com' "$SETTINGS"; then
+            # 在第一个 repositories { 块内首行插入 GCS maven
+            sed -i '/repositories[[:space:]]*{/a\        maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }' "$SETTINGS"
+          fi
+          # 同样处理 app 模块 build.gradle.kts / repositories
+          for f in src-tauri/gen/android/build.gradle.kts \
+                   src-tauri/gen/android/build.gradle \
+                   src-tauri/gen/android/app/build.gradle.kts \
+                   src-tauri/gen/android/app/build.gradle; do
+            if [ -f "$f" ] && ! grep -q 'maven-central.storage-download.googleapis.com' "$f"; then
+              sed -i '/repositories[[:space:]]*{/a\        maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }' "$f" 2>/dev/null \
+                || sed -i '/repositories[[:space:]]*{/a\        maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }' "$f"
+            fi
+          done
+          echo "=== init.gradle ===" && cat "$HOME/.gradle/init.gradle"
+          echo "=== settings.gradle head ===" && head -40 "$SETTINGS" || true
+
       - name: Build release APK (arm64 only)
         # --target 短名 aarch64（不是 aarch64-linux-android triple）
         # --apk 只产 APK；--split-per-abi 单架构包，体积更小
-        run: cargo tauri android build --apk --target aarch64 --split-per-abi
+        # 重试 3 次：Maven Central 429 偶发，GCS 镜像 + 重试双保险
+        run: |
+          set +e
+          for i in 1 2 3; do
+            echo "::group::Android build attempt $i"
+            cargo tauri android build --apk --target aarch64 --split-per-abi
+            code=$?
+            echo "::endgroup::"
+            if [ $code -eq 0 ]; then
+              exit 0
+            fi
+            echo "attempt $i failed (exit $code), sleeping $((i*45))s before retry..."
+            sleep $((i * 45))
+          done
+          exit 1
 
       - name: Upload APK to release
         env:
