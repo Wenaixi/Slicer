@@ -94,7 +94,10 @@ export function supportsDirectorySave(): boolean {
   return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function'
 }
 
-/** 尝试让用户选保存路径，未授权或不支持时返回 null（由调用方走降级下载） */
+/** 尝试让用户选保存路径。
+ *  - 浏览器不支持 showSaveFilePicker:返回 null(能力不可用,非错误)
+ *  - 用户取消(AbortError):返回 null(预期行为)
+ *  - 权限/安全错误(NotAllowedError / SecurityError 等):抛错,让调用方知道降级原因 */
 export async function pickSaveLocation(
   suggestedName: string,
 ): Promise<FsFileHandle | null> {
@@ -114,8 +117,8 @@ export async function pickSaveLocation(
     }
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') return null
-    // 浏览器禁用（隐私模式 / 权限）：返回 null
-    return null
+    // 权限/能力失败:抛错(ponytail: 不吞,让调用方感知)
+    throw err
   }
 }
 
