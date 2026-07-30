@@ -114,14 +114,17 @@ jobs:
         # the sed patterns above are best-effort; verify with grep after
 
       - name: Build release APK (arm64 only)
-        run: cargo tauri android build --target aarch64-linux-android
+        # --target 短名 aarch64（不是 aarch64-linux-android triple）
+        # --apk 只产 APK；--split-per-abi 单架构包，体积更小
+        run: cargo tauri android build --apk --target aarch64 --split-per-abi
 
       - name: Upload APK to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # github.ref_name for tag v0.19.0 is "v0.19.0" — use directly, no v prefix
-          find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f -print0 | xargs -0 -r gh release upload "${{ github.ref_name }}" --clobber
+          # 上传 arm64 release APK，并删掉历史 universal debug 大包（若还在）
+          find src-tauri/gen/android -name '*.apk' -type f -print0 | xargs -0 -r gh release upload "${{ github.ref_name }}" --clobber
+          gh release delete-asset "${{ github.ref_name }}" app-universal-debug.apk --yes 2>/dev/null || true
 
   build-html-zip:
     name: HTML portable .zip
