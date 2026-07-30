@@ -268,24 +268,13 @@ export function MergePanel() {
         },
         {
           shouldAbort: () => abortRef.current,
-          onPlainChunk: ({ index, blob }) => {
+          onPlainChunk: async ({ index, blob }) => {
             // 优先级：folderHandle > fileHandle > 内存累积
+            // onPlainChunk 改为 async 后，写盘错误能直接上抛，由外层 catch 统一兜底
             if (folderHandle) {
-              void (async () => {
-                try {
-                  await folderHandle!.write(blob)
-                } catch (err) {
-                  console.error('写文件夹失败:', err)
-                }
-              })()
+              await folderHandle.write(blob)
             } else if (fileHandle) {
-              void (async () => {
-                try {
-                  await fileHandle!.write(blob)
-                } catch (err) {
-                  console.error('写文件失败:', err)
-                }
-              })()
+              await fileHandle.write(blob)
             } else {
               memoryChunks.push(blob)
               memoryBytes += blob.size
