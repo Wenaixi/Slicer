@@ -105,6 +105,9 @@ jobs:
       - name: Install npm deps
         run: npm --prefix app ci
 
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2.0" --locked
+
       - name: Init Android project
         run: cargo tauri android init
 
