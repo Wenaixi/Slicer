@@ -12,16 +12,37 @@
 :root {
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* 字体层级（Apple：display 收紧字距 / body 舒适行距 / mono 等宽数字） */
+  --font-display:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC",
+    "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-body:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
 }
 
 html {
-  font: 100%/1.5 ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font: 100%/1.5 var(--font-body);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
+/* 大标题 / 卡片标题用 display 字体，收紧字距 */
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.025em;
+  font-feature-settings: "ss01" on, "cv01" on;
+}
+
+/* 默认等宽字体（数字/文件名/参数值） */
 .font-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" on, "zero" on, "ss01" on;
 }
 
 /* 大标题负字距（Apple typography：大字号收紧字距） */

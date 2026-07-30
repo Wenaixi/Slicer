@@ -1,7 +1,9 @@
 import { useAppState, setTab } from '../lib/store'
+import { useLocale, t } from '../lib/i18n'
 
 export function TabBar() {
   const { tab } = useAppState()
+  useLocale()
 
   const btnBase =
     'px-6 py-3 font-mono text-sm border-b-2 transition-fast flex items-center gap-2'
@@ -18,8 +20,8 @@ export function TabBar() {
         aria-pressed={tab === 'split'}
       >
         <TabIcon kind="split" />
-        文件分割
-        <span className="text-[10px] opacity-60 font-normal uppercase">[ S ]</span>
+        {t('header.split')}
+        <span className="text-[10px] opacity-60 font-normal uppercase">[ Q ]</span>
       </button>
       <button
         onClick={() => setTab('merge')}
@@ -31,8 +33,8 @@ export function TabBar() {
         aria-pressed={tab === 'merge'}
       >
         <TabIcon kind="merge" />
-        切片合并
-        <span className="text-[10px] opacity-60 font-normal uppercase">[ M ]</span>
+        {t('header.merge')}
+        <span className="text-[10px] opacity-60 font-normal uppercase">[ W ]</span>
       </button>
     </div>
   )
