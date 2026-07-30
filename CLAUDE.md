@@ -2,7 +2,7 @@
 
 > 项目根：`D:\newC\stick2\Slicer\app`（Vite + React 19 + TypeScript + Tailwind CSS v4）
 > 定位：纯前端高性能文件分割/合并工具，可选 SealGo 密码加密，黑白极简 + Apple 流体动效。
-> 最后更新：2026-07-30（v15 收尾：批量ZIP/进度仪表/跨标签/虚拟滚动/错误分类 + 响应式）
+> 最后更新：2026-07-30（v18 review-tdd 第一轮：22 commits 修复 + 27 新测试）
 
 ## 1. 项目结构
 
@@ -166,30 +166,41 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 
 | 轮次 | 状态 | 目标 |
 |---|---|---|
-| v1 | ✅ 完成 | 基础分割/合并/密码加密，构建通过 |
-| v2 | ✅ 完成 | 全局拖拽、键盘快捷键、主题过渡、错误边界、可访问性 |
-| v3 | ✅ 完成 | 大文件流式、zip 打包、性能压测、edge case 加固、视觉细节抛光 |
-| v4-v6 | ✅ 完成 | 完善人性化体验、优化性能、深度单测 |
-| v7-v9 | ✅ 完成 | 内存占用优化、Worker/直写磁盘、加密流式 |
-| v10 | ✅ 完成 | 断点续传：目录探测跳过已完成切片 + sessionStorage 进度持久化 + File System Access API 直写磁盘 |
-| v11 | ✅ 完成 | 流式合并/解密：stream-merge.ts 统一明文/加密路径，onPlainChunk 回调逐块交付，内存峰值 O(chunkSize) |
-| v12 | ✅ 完成 | 快捷键 S/M→Q/W（避开浏览器冲突）+ ZIP 打包/解压 + 文件夹拖拽（webkitGetAsEntry 递归拉平） |
-| v13 | ✅ 完成 | 批量 ZIP 合并：保留 ZIP 内相对路径作为 name，让 groupMergeFiles 跨 ZIP 按 baseName 归组 |
-| v14 | ✅ 完成 | 进度可视化：progress-meter（指数滑动平均 MB/s + ETA）+ 实时仪表 4 列（吞吐/ETA/已处理/已跳过） |
-| v15 | ✅ 完成 | 跨标签进度共享（BroadcastChannel）+ 虚拟滚动（>80 行启用）+ 解密错误分类 + 响应式设计 6 段媒体查询 |
-| v16 | ✅ 完成 | i18n 双语 store（zh 默认，localStorage 记忆）+ 字体三级分级（display/body/mono + tnum/zero 特性） |
-| v17 | ✅ 完成 | Split/Merge 全量 i18n：字典 130+ key，变量插值 {name}/{size}/{minMem}/{n}；aria-label 双语 |
-| v18+ | ⏳ 待做 | 7z 完整支持（7z-wasm）、Worker 加密移到后台线程、切片完整性校验（SHA-256 manifest）、面板内错误兜底 UI |
+| v1-v15 | ✅ 完成 | 见 git log（v15 收尾五件套：批量ZIP/进度仪表/跨标签/虚拟滚动/错误分类 + 响应式） |
+| v16 | ✅ 完成 | i18n 双语 store（zh 默认，localStorage 记忆）+ 字体三级分级 |
+| v17 | ✅ 完成 | Split/Merge 全量 i18n：字典 130+ key |
+| v18 | ✅ 完成 | Worker KDF 后台派生 + manifest SHA-256 完整性校验 + 面板内错误兜底（ErrorStack + panel-error store + ErrorBoundary）+ 跨 worktree review-tdd 收尾 22 项修复 |
+| v19+ | ⏳ 待做 | 7z 完整支持（7z-wasm）、Worker 加密扩展到 encrypt/decrypt/rand（非 KDF）、CLAUDE.md 第 7 节补 fire-and-forget 风险说明、B3/B4 补做（等 manifest.ts 合入后再跑） |
 
 ## 6. 已修复的坑（防止回归）
 
 1. **盐不一致**：encryptWithKey 必须接收与派生 fileKey 相同的盐，否则解密失败。已在 WASM 签名中强制传 salt。
-2. **SharedArrayBuffer 类型**：`new Blob([uint8])` 会报 TS2322，必须 `uint8.slice().buffer as ArrayBuffer`。
+2. **SharedArrayBuffer 类型**：`new Blob([uint8])` 会报 TS2322，必须 `uint8.slice().buffer as ArrayBuffer`。**`sha256Hex`（manifest.ts）还要先 `data.buffer.slice(byteOffset, byteOffset+byteLength)`**，否则未来 subarray 子视图越界 hash（CLAUDE.md 4.4 红线）。
 3. **wasm_exec.js 占位**：GitHub release 中的 wasm_exec.js 是 14B 占位文本，必须用本地 Go 安装目录的真实文件替换。
 4. **拖拽闪烁**：window 级 dragenter/leave 需用计数器（原始 HTML 版用 dragCounter），组件内 DropZone 简化版用单 ref 标记；多层级嵌套时注意冒泡。
 5. **jsdom + Go WASM 不稳定**：fetch('/wasm/SealGo.wasm') 在 jsdom 报 ERR_INVALID_URL → 用 isNode 判断走 node:fs；"Go program has already exited" 反复出现 → 决策：协议级测试常跑，WASM e2e 用 `WASM_E2E=1` 门控（describe.skip 默认）。
 6. **TS6133 死变量**：tsc -b 默认 noUnusedLocals=true，每个 `Edit` 后必须保证引入的全部被引用，否则编译失败。
 7. **planTotalParts 早期笔误**：executeSplit 内 `probeResumePlan(..., planTotalParts)` 未声明 → 组件已 `const plan = computeChunkPlan(file.size, options)`，直接传 `plan.totalParts`。
+8. **直写磁盘 fire-and-forget write**（review-tdd v18 抓出）：onChunk/onPlainChunk 内 `void (async () => await handle.write())()` + close 早于 write → 输出文件截断 / 数据丢失 / 关闭 tab 丢切片。**根治**：onChunk 签名改 `async (chunk) => Promise<void>`，stream-split/stream-merge 内 for 循环 await 回调；SplitPanel 维护 `writePromises[]` 在 streamSplit 后 `await Promise.allSettled(writePromises)` 再 setResults/toast。
+9. **decrypt-error 分类顺序**（review-tdd v18）：原代码先 length<100 → not-sealgo，但魔数 SC01 正确但长度不足应归 header-corrupt。**根治**：先检查魔数 → 错归 not-sealgo；对但 length<100 → header-corrupt。**注意**：已有测试反向固化错误行为（test:22-27），必须同步修正测试断言。
+10. **resume.ts infix 命名双重去扩展名**（review-tdd v18）：line 23 已去一次，line 104 又去一次 → `big.tar.gz` 解析得 `big`，正则匹配不上真实切片 `big.tar_part1.gz`。**根治**：parseIndex 的 infix 分支只对入参 baseName 做正则转义，不再二次去扩展名。同时补 `_partN.ext` 形态支持（与 archive.ts:77 一致）。
+11. **worker-kdf 响应不校验 id**（review-tdd v18）：旧响应可能错位完成新请求 → 派生错位 fileKey → 生成无法解密的切片。**根治**：onmessage 内比对 ev.data.id 与当前 pending，不匹配丢弃；pending 改 Map<id, {resolve, reject}> 支持并发；counter 改为 per-dispatcher 闭包避免跨实例污染。
+12. **sealgo readyPromise 失败永久缓存**（review-tdd v18）：rejected Promise 永不重置 → 临时网络错误后整页刷新才能恢复。**根治**：attempt 上挂 .catch 失败时若缓存仍是自己则置 null，下次调用重新发起。
+13. **sealgo Node 依赖警告**（review-tdd v18）：`node:fs/promises` / `node:path` 被 Vite 浏览器 externalize。**根治**：Node 依赖拆到 `sealgo-node.ts`；主线程用 `/* @vite-ignore */` 动态 import 阻止 Rolldown 静态分析。
+14. **crypto-worker.ts 整套死代码**（review-tdd v18）：7 个导出（WorkerRequest/WorkerResponse/initCryptoWorker/deriveKeyInWorker/encryptInWorker/decryptInWorker/randInWorker）全仓零引用；crypto.ts:34 已切换到 `./worker-kdf`。**根治**：整体删除文件，保留 worker-kdf.ts 单一来源。
+15. **lib 下 React hook 倒灌**（review-tdd v18）：store.ts / toast.ts / i18n.ts / virtualize.ts / panel-error.ts 都静态 import React，违反 4.3 节「纯逻辑放 lib」。**根治**：拆为「lib/ 纯函数 store + components/hooks/ React hook wrapper」两份，调用方只 import hook。
+16. **archive unzipSync 主线程阻塞**（review-tdd v18）：unzipAll 暴露 async 但内部 `unzipSync(buf)` 同步解压整包。**根治**：入口 `await new Promise(r => setTimeout(r, 0))` 让出主线程一帧（ponytail 偏好）；或改 fflate 异步 Unzip 流式。
+17. **fs-access pickSaveLocation 取消 vs 权限**（review-tdd v18）：AbortError 与权限失败都 return null，调用方无法区分。**根治**：catch 内 AbortError → null 静默，其他 DOMException → throw 区分。
+18. **cross-tab BroadcastChannel 不重放历史消息**（review-tdd v18）：新订阅者错过订阅前的 start/done/abort。**根治**：broadcastProgress 把 split-progress 写 sessionStorage；subscribeProgress 注册时 `readLastEvent()` 补发一次。
+19. **MergePanel 密码校验前创建句柄**（review-tdd v18）：createWritable 后密码不足直接 return 未 close。**根治**：密码校验前置到函数最开头；try/finally 兜底 close。
+20. **stream-merge 每片重复派生 Argon2id**（review-tdd v18）：100 片同 salt 各派生一次 = 6.4GB 内存压力 + 100s 耗时。**根治**：循环外派生一次 fileKey 缓存，循环内 `saltEquals` 校验同组后 `decryptChunkWithKey` 复用；finally 擦除 fileKey。
+21. **SplitPanel useEffect 依赖漏 options.naming**（review-tdd v18）：续传串味——旧 part 命名的 completedIndices 被误用于 infix 模式。**根治**：依赖补 `options.mode/sizeValue/sizeUnit/countValue/naming/encrypt`，对比用 `optionsKey()` 序列化（剥离 password）。
+22. **split-panel onChunk 后未等写盘就 setResults**（review-tdd v18）：详见坑 #8；streamSplit 同步 resolve → setResults/clearProgress/broadcastProgress → toast「成功」，但 write Promise 仍在事件队列。**根治**：见 #8。
+23. **续传后下载 manifest 只含本轮切片**（review-tdd v18）：results 只含本轮新生成切片，跳过切片不进 manifest → 不完整校验清单。**根治**：`collectAllChunks()` 合并 results + 磁盘已有切片，按 index 升序排。
+24. **manifest.ts sha256Hex 必先 .slice()**（v18 1911c71 修复）：subarray 子视图的 .buffer 指向整块 backing buffer，必须 `data.buffer.slice(byteOffset, byteOffset+byteLength)` 切出对应区间；ArrayBuffer 直接透传。见坑 #2。
+25. **manifest.ts parseManifest 缺 chunks 条目结构校验**（review-tdd v18）：仅校验三个顶层字段，chunks=[null] 会 TypeError 击穿 runVerify。**根治**：每条 chunk 校验 `typeof c.name==='string' && typeof c.size==='number' && typeof c.sha256==='string' && /^[0-9a-f]{64}$/.test(c.sha256)`。
+26. **MergePanel 诊断字段误标**（review-tdd v18）：`file size: ${itemIndex}` — itemIndex 是切片序号不是文件大小，复制诊断误导开发者。**根治**：改为 `chunk index: ${err.itemIndex}` 或结构化字段。
+27. **i18n 硬编码中文密度被严重低估**（review-tdd v18）：PasswordPanel 之外，9 个组件（Header / GlobalDropOverlay / ProgressBar / ErrorBoundary / DropZone / FileCard / SplitPanel / MergePanel）共 30+ 处硬编码中文。**根治**：v18 全量 i18n 收尾，新增 35+ 个 key（password.* / header.aria.* / overlay.* / progress.fallback / errorBoundary.* / dropzone.* / fileCard.* / split.result.* / split.manifest.* / split.toast.* / merge.toast.* 等）；STRENGTH_LABEL 改为接受 locale 的纯函数 `strengthLabels(locale)`。
 
 ## 7. 断点续传架构（v10）
 
