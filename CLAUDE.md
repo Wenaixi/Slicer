@@ -2,7 +2,7 @@
 
 > 项目根：`D:\newC\stick2\Slicer\app`（Vite + React 19 + TypeScript + Tailwind CSS v4）
 > 定位：纯前端高性能文件分割/合并工具，可选 SealGo 密码加密，黑白极简 + Apple 流体动效。
-> 最后更新：2026-07-30（v18 review-tdd 第一轮：22 commits 修复 + 27 新测试）
+> 最后更新：2026-07-30（v18 review-tdd 收尾 + v19 Tauri 多平台打包启动）
 
 ## 1. 项目结构
 
@@ -170,7 +170,7 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 | v16 | ✅ 完成 | i18n 双语 store（zh 默认，localStorage 记忆）+ 字体三级分级 |
 | v17 | ✅ 完成 | Split/Merge 全量 i18n：字典 130+ key |
 | v18 | ✅ 完成 | Worker KDF 后台派生 + manifest SHA-256 完整性校验 + 面板内错误兜底（ErrorStack + panel-error store + ErrorBoundary）+ 跨 worktree review-tdd 收尾 22 项修复 |
-| v19+ | ⏳ 待做 | 7z 完整支持（7z-wasm）、Worker 加密扩展到 encrypt/decrypt/rand（非 KDF）、CLAUDE.md 第 7 节补 fire-and-forget 风险说明、B3/B4 补做（等 manifest.ts 合入后再跑） |
+| v19+ | 🔄 进行中 | Tauri v2 三端 WebView 打包（Windows/Linux/Android），单 src-tauri 壳 + 三份 conf |
 
 ## 6. 已修复的坑（防止回归）
 
@@ -201,6 +201,8 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 25. **manifest.ts parseManifest 缺 chunks 条目结构校验**（review-tdd v18）：仅校验三个顶层字段，chunks=[null] 会 TypeError 击穿 runVerify。**根治**：每条 chunk 校验 `typeof c.name==='string' && typeof c.size==='number' && typeof c.sha256==='string' && /^[0-9a-f]{64}$/.test(c.sha256)`。
 26. **MergePanel 诊断字段误标**（review-tdd v18）：`file size: ${itemIndex}` — itemIndex 是切片序号不是文件大小，复制诊断误导开发者。**根治**：改为 `chunk index: ${err.itemIndex}` 或结构化字段。
 27. **i18n 硬编码中文密度被严重低估**（review-tdd v18）：PasswordPanel 之外，9 个组件（Header / GlobalDropOverlay / ProgressBar / ErrorBoundary / DropZone / FileCard / SplitPanel / MergePanel）共 30+ 处硬编码中文。**根治**：v18 全量 i18n 收尾，新增 35+ 个 key（password.* / header.aria.* / overlay.* / progress.fallback / errorBoundary.* / dropzone.* / fileCard.* / split.result.* / split.manifest.* / split.toast.* / merge.toast.* 等）；STRENGTH_LABEL 改为接受 locale 的纯函数 `strengthLabels(locale)`。
+28. **downloadManifest 续传漏收磁盘切片**（v18 收尾补修）：SplitPanel.downloadManifest 直接传 results，未走 collectAllChunks → 续传场景下被跳过的切片在 manifest 缺失，verifyChunksAgainstManifest 报全 missing。**根治**：downloadManifest 先 `await collectAllChunks(results, dirHandleRef.current, resumeMode)` 再 buildManifest，toast count 用 full.length。
+29. **parseManifest 缺 chunk 条目结构校验**（v18 收尾补修）：仅校验顶层三字段，chunks=[null] / chunks 含非法 sha256 会 TypeError 击穿 runVerify。**根治**：每条 chunk 校验 `c && typeof c.name==='string' && typeof c.size==='number' && typeof c.sha256==='string' && /^[0-9a-f]{64}$/.test(c.sha256) && typeof c.index==='number'`，不通过整个 parseManifest 返 null。
 
 ## 7. 断点续传架构（v10）
 
@@ -252,3 +254,17 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 - decrypt-error 7 例覆盖魔数错/长度残缺/版本不支持/密码错误分类
 - progress-meter 5 例覆盖累计/百分比/ETA 计算
 - i18n 7 例覆盖默认中文/切换/持久化/未知 key/双语字典完整性
+
+## 9. Tauri 多平台架构（v19）
+
+- **壳位置**：`src-tauri/`（仓库根目录，与 `app/` 平级，单代码库三端）
+- **构建命令**：
+  - Windows: `cargo tauri build`（本机）→ `.msi` + `nsis .exe`
+  - Linux: `cargo tauri build --config src-tauri/tauri.linux.conf.json`（CI ubuntu-latest）→ `.deb` + `.AppImage`
+  - Android: `cargo tauri android build -- --apk`（CI ubuntu-latest）→ `.apk`
+- **前端零改动**：除 `vite.config.ts` 加 `base: './'` 外，`app/src/` 业务代码零改；**不引** `@tauri-apps/api`（壳与前端单向依赖）。
+- **Linux 特殊**：必须 `tauri-plugin-localhost` + `portpicker`，否则 `crypto.subtle` 不可用（详见后续坑 #31：Linux/secure-context 问题）。
+- **Android 特殊**：包名 `com.slicer.app`；`src-tauri/gen/android/` 入 git；签名用 GitHub Secrets。
+- **CSP 红线**：`script-src 'self' 'wasm-unsafe-eval'`（Go wasm 必须）；`connect-src 'self' ipc: http://ipc.localhost`。
+- **设计文档**：`docs/superpowers/specs/2026-07-30-tauri-multiplatform-design.md`
+- **实施计划**：`docs/superpowers/plans/2026-07-30-tauri-multiplatform-plan.md`
