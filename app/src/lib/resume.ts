@@ -100,9 +100,9 @@ export function parseIndex(
   } else if (pattern === 'number') {
     m = chunkName.match(/\.(\d{3,4})(?:\.sc)?$/)
   } else {
-    // infix：原文件名_part1.ext
-    const escBase = baseName.replace(/\.[^.]+$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    m = chunkName.match(new RegExp(`^${escBase}_part(\\d+)(?:\\.sc)?$`))
+    // infix：原文件名_part1.ext（baseName 已是去一次扩展名的形式；后续可选扩展名 + .sc）
+    const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    m = chunkName.match(new RegExp(`^${escBase}_part(\\d+)(?:\\.[^.]+)?(?:\\.sc)?$`))
   }
   if (!m) return null
   const n = parseInt(m[1], 10)
