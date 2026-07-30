@@ -200,6 +200,7 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
   3. `android-actions/setup-android@v3` 的 `packages` 必须**单行空格分隔**，`package-list` 输入无效；多行 `|` 会被当成一个包名
   4. 上传用 `find ... -print0 | xargs -0 gh release upload "${{ github.ref_name }}" --clobber`（glob 在 shell 不展开；tagName 不要再加 `v` 前缀）
   5. universal debug 四 ABI ≈ 433MB；release + arm64 only + split-per-abi 目标 ≈ 30MB
+  6. **Maven Central 429**：GHA 出口 IP 常被限流。`~/.gradle/init.gradle` + settings.gradle 前置 `https://maven-central.storage-download.googleapis.com/maven2/`；构建 step 3 次退避重试
 
 ## 6. 测试基线
 
