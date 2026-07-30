@@ -88,8 +88,8 @@ export function clearProgress(): void {
   } catch {}
 }
 
-/** 从文件名解析分片序号 */
-function parseIndex(
+/** 从文件名解析分片序号（导出供测试做回归保护） */
+export function parseIndex(
   chunkName: string,
   baseName: string,
   pattern: SplitOptions['naming'],
