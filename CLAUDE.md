@@ -170,7 +170,7 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 | v16 | ✅ 完成 | i18n 双语 store（zh 默认，localStorage 记忆）+ 字体三级分级 |
 | v17 | ✅ 完成 | Split/Merge 全量 i18n：字典 130+ key |
 | v18 | ✅ 完成 | Worker KDF 后台派生 + manifest SHA-256 完整性校验 + 面板内错误兜底（ErrorStack + panel-error store + ErrorBoundary）+ 跨 worktree review-tdd 收尾 22 项修复 |
-| v19+ | 🔄 进行中 | Tauri v2 三端 WebView 打包（Windows/Linux/Android），单 src-tauri 壳 + 三份 conf |
+| v19+ | 🔄 进行中 | Tauri v2 三端 WebView 打包（Windows/Linux/Android），单 src-tauri 壳 + 三份 conf（Android 脚手架已确认由 CI 完成，本机无 Android SDK，详见 §6.5） |
 
 ## 6. 已修复的坑（防止回归）
 
@@ -203,6 +203,20 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 27. **i18n 硬编码中文密度被严重低估**（review-tdd v18）：PasswordPanel 之外，9 个组件（Header / GlobalDropOverlay / ProgressBar / ErrorBoundary / DropZone / FileCard / SplitPanel / MergePanel）共 30+ 处硬编码中文。**根治**：v18 全量 i18n 收尾，新增 35+ 个 key（password.* / header.aria.* / overlay.* / progress.fallback / errorBoundary.* / dropzone.* / fileCard.* / split.result.* / split.manifest.* / split.toast.* / merge.toast.* 等）；STRENGTH_LABEL 改为接受 locale 的纯函数 `strengthLabels(locale)`。
 28. **downloadManifest 续传漏收磁盘切片**（v18 收尾补修）：SplitPanel.downloadManifest 直接传 results，未走 collectAllChunks → 续传场景下被跳过的切片在 manifest 缺失，verifyChunksAgainstManifest 报全 missing。**根治**：downloadManifest 先 `await collectAllChunks(results, dirHandleRef.current, resumeMode)` 再 buildManifest，toast count 用 full.length。
 29. **parseManifest 缺 chunk 条目结构校验**（v18 收尾补修）：仅校验顶层三字段，chunks=[null] / chunks 含非法 sha256 会 TypeError 击穿 runVerify。**根治**：每条 chunk 校验 `c && typeof c.name==='string' && typeof c.size==='number' && typeof c.sha256==='string' && /^[0-9a-f]{64}$/.test(c.sha256) && typeof c.index==='number'`，不通过整个 parseManifest 返 null。
+
+## 6.5 Android 工程脚手架 — 本机受限（v19 Task 8）
+
+- **现实约束**：本机（`D:\newC\stick2\Slicer`）没有 Android SDK，也没有可用的 Java 工具链（`JAVA_HOME` 指向 `D:\Program Files (x86)\Microsoft Visual Studio\Shared\Android\openjdk\jdk-21.0.8`，但 `bin\java.exe` 实际不存在）。`cargo tauri android init` 直接拒绝继续并提示走手工安装流程（错误原文见 `docs/tauri-android-init-blocked.md`）。
+- **本任务完成范围**：
+  - 安装 4 个 Rust Android 编译目标成功：`aarch64-linux-android` / `armv7-linux-androideabi` / `i686-linux-android` / `x86_64-linux-android`。
+  - 确认 `src-tauri/gen/android/` 目录未生成（`cargo tauri android init` 在 SDK 检测失败后立即终止）。
+  - 不手工伪造 Gradle 工程，也不安装 Android SDK；脚手架与首版 APK 全部交给 GitHub Actions 端的 `ubuntu-latest` runner（见 §7.6）。
+- **后续可由 CI 自动处理的事项**：
+  1. 安装 JDK 17、Android SDK command-line tools、build-tools、platform-tools、NDK；
+  2. 重跑 `cargo tauri android init` 生成 `src-tauri/gen/android/`；
+  3. 改写 `app_name = Slicer`、签名密钥从 Secrets 注入；
+  4. 跑 `cargo tauri android build -- --apk` 产出 APK 工件。
+- **回归断言**：未来本机若配齐 SDK，应再次执行 `cargo tauri android init`，生成的文件如未与本次 commit 期望一致，先看 `docs/tauri-android-init-blocked.md` 再决定是否回滚。
 
 ## 7. 断点续传架构（v10）
 
