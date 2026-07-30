@@ -200,27 +200,27 @@ export function SplitPanel() {
     })
 
     const chunks: ChunkResult[] = []
+    // 直写磁盘的写盘 Promise 收集：streamSplit 完成后统一 await allSettled，
+    // 让任意写盘错误都能被外层 catch 捕获（避免 onChunk 改 async 后仍吞错）
+    const writePromises: Promise<void>[] = []
     try {
       const summary = await streamSplit(
         file,
         options,
         {
           shouldAbort: () => abortRef.current,
-          onChunk: (chunk) => {
-            // 直写磁盘：立即落盘，不驻留内存
+          onChunk: async (chunk) => {
+            // 直写磁盘：把写盘 promise 收集起来，循环结束后统一等待
             if (dirHandle) {
-              void (async () => {
-                try {
-                  const handle = await (dirHandle as unknown as {
-                    getFileHandle: (n: string, opts: { create: boolean }) => Promise<FileSystemFileHandle>
-                  }).getFileHandle(chunk.name, { create: true })
-                  const writable = await (handle as unknown as { createWritable: () => Promise<{ write: (b: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void> }> }).createWritable()
-                  await writable.write(chunk.blob)
-                  await writable.close()
-                } catch (err) {
-                  console.error('写磁盘失败:', err)
-                }
+              const p = (async () => {
+                const handle = await (dirHandle as unknown as {
+                  getFileHandle: (n: string, opts: { create: boolean }) => Promise<FileSystemFileHandle>
+                }).getFileHandle(chunk.name, { create: true })
+                const writable = await (handle as unknown as { createWritable: () => Promise<{ write: (b: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void> }> }).createWritable()
+                await writable.write(chunk.blob)
+                await writable.close()
               })()
+              writePromises.push(p)
             }
             chunks.push({
               name: chunk.name,
@@ -271,6 +271,13 @@ export function SplitPanel() {
         },
         { skipIndices },
       )
+
+      // 等待所有写盘操作完成（直写磁盘模式）：任一失败上抛给外层 catch
+      const writeResults = await Promise.allSettled(writePromises)
+      const writeFailures = writeResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      if (writeFailures.length > 0) {
+        throw writeFailures[0].reason
+      }
 
       if (abortRef.current) {
         // 中断：保留进度供下次续传
