@@ -112,7 +112,7 @@ jobs:
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">Slicer</string>|' src-tauri/gen/android/app/src/main/res/values/strings.xml
           sed -i 's|"com\.tauri\.dev"|"com.slicer.app"|g' src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
-      # 签名：只解码 keystore；构建后用 apksigner 签（不依赖 Gradle signingConfigs）。
+      # 签名：只解码 keystore；构建后用 apksigner 签。
       # Secrets: ANDROID_KEY_BASE64 / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
       - name: Setup Android signing keystore
         env:
@@ -124,18 +124,25 @@ jobs:
             exit 1
           fi
           echo "secret char length=${#ANDROID_KEY_BASE64}"
-          # 清洗后写文件，python 解码（coreutils base64 对 padding/空白更挑剔）
           printf '%s' "$ANDROID_KEY_BASE64" | tr -cd 'A-Za-z0-9+/=' > "$RUNNER_TEMP/key.b64"
           echo "cleaned b64 bytes=$(wc -c < "$RUNNER_TEMP/key.b64")"
-          python3 -c 'import base64,os,pathlib,sys
-          p=pathlib.Path(os.environ["RUNNER_TEMP"])/"key.b64"
-          s=p.read_text(encoding="ascii").strip()
-          s+="="*((-len(s))%4)
-          d=base64.b64decode(s)
-          out=pathlib.Path(os.environ["RUNNER_TEMP"])/"keystore.jks"
+          # 写独立 py 文件，避免 YAML/shell 引号地狱
+          cat > "$RUNNER_TEMP/decode_ks.py" <<'PY'
+          import base64, os, pathlib, sys
+          p = pathlib.Path(os.environ["RUNNER_TEMP"]) / "key.b64"
+          s = p.read_text(encoding="ascii").strip()
+          s += "=" * ((-len(s)) % 4)
+          d = base64.b64decode(s)
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "keystore.jks"
           out.write_bytes(d)
-          print(f"keystore size={len(d)} magic={d[:4].hex()} format={'PKCS12' if d[:1]==b\"\\x30\" else \"other\"}")
-          sys.exit(0 if len(d)>100 else 1)'
+          kind = "PKCS12" if d[:1] == b"\x30" else "other"
+          print(f"keystore size={len(d)} magic={d[:4].hex()} format={kind}")
+          if len(d) < 100:
+              sys.exit("keystore too small")
+          PY
+          # 去掉 YAML 缩进带进来的前导空格
+          python3 -c "from pathlib import Path; import os; p=Path(os.environ['RUNNER_TEMP'])/'decode_ks.py'; lines=p.read_text().splitlines(); ind=[len(l)-len(l.lstrip(' ')) for l in lines if l.strip()]; m=min(ind) if ind else 0; p.write_text('\n'.join((l[m:] if len(l)>=m else l) for l in lines)+'\n')"
+          python3 "$RUNNER_TEMP/decode_ks.py"
           ls -la "$RUNNER_TEMP/keystore.jks"
           echo "keystore ready"
 
