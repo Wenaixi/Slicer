@@ -26,6 +26,25 @@ describe('sha256Hex', () => {
     const sha = await sha256Hex(new TextEncoder().encode('hello'))
     expect(sha).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824')
   })
+  it('subarray 子视图只 hash 切片区间，不越界到整 buffer', async () => {
+    // 构造 16 字节底层 buffer，取中间 8 字节 subarray
+    const full = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+    const sub = full.subarray(4, 12) // [4..11]
+    // 期望：等于只对 [4..11] 这 8 字节计算 hash
+    const expected = await crypto.subtle.digest('SHA-256', sub.slice().buffer as ArrayBuffer)
+    const expectedHex = Array.from(new Uint8Array(expected))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+    // 反向校验：不能等于整 16 字节的 hash
+    const wholeHash = await crypto.subtle.digest('SHA-256', full.buffer as ArrayBuffer)
+    const wholeHex = Array.from(new Uint8Array(wholeHash))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+    expect(expectedHex).not.toBe(wholeHex)
+
+    const actual = await sha256Hex(sub)
+    expect(actual).toBe(expectedHex)
+  })
 })
 
 describe('buildManifest / serialize / parse 往返', () => {

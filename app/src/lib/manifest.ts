@@ -44,8 +44,14 @@ export interface SplitManifest {
 
 /** 计算 Uint8Array 的 SHA-256（hex） */
 export async function sha256Hex(data: Uint8Array | ArrayBuffer): Promise<string> {
-  const buf = data instanceof Uint8Array ? data.buffer as ArrayBuffer : data;
-  const hash = await crypto.subtle.digest('SHA-256', buf);
+  // ponytail: 必须切出视图对应区间，否则 subarray 子视图的 .buffer 仍指向整块 backing buffer，
+  // 导致"取了中间一段却 hash 了整文件"的越界 hash。
+  // 注意 data.byteOffset / data.byteLength 仅 Uint8Array 有，ArrayBuffer 直接传原 buffer。
+  const view: ArrayBuffer =
+    data instanceof Uint8Array
+      ? (data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer)
+      : data;
+  const hash = await crypto.subtle.digest('SHA-256', view);
   return Array.from(new Uint8Array(hash))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
