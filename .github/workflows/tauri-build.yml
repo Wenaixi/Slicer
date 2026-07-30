@@ -71,16 +71,14 @@ jobs:
           releaseDraft: true
 
   build-android:
-    name: Android .apk (debug)
+    name: Android .apk (release, arm64)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - uses: actions/setup-node@v4
         with:
@@ -119,8 +117,10 @@ jobs:
           sed -i 's|"com\.tauri\.dev"|"com.slicer.app"|g' src-tauri/gen/android/app/src/main/AndroidManifest.xml
         # the sed patterns above are best-effort; verify with grep after
 
-      - name: Build debug APK
-        run: cargo tauri android build --debug
+      - name: Build release APK (arm64 only)
+        run: |
+          cargo tauri android build --release \
+            --target aarch64-linux-android
 
       - name: Upload APK to release
         env:
