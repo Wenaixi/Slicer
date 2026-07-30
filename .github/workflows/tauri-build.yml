@@ -123,11 +123,10 @@ jobs:
         run: cargo tauri android build --debug
 
       - name: Upload APK to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload v${{ github.ref_name }} src-tauri/gen/android/app/build/outputs/apk/**/*.apk --clobber
 
   build-html-zip:
     name: HTML portable .zip
