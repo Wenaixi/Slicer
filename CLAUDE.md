@@ -176,7 +176,9 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 | v13 | ✅ 完成 | 批量 ZIP 合并：保留 ZIP 内相对路径作为 name，让 groupMergeFiles 跨 ZIP 按 baseName 归组 |
 | v14 | ✅ 完成 | 进度可视化：progress-meter（指数滑动平均 MB/s + ETA）+ 实时仪表 4 列（吞吐/ETA/已处理/已跳过） |
 | v15 | ✅ 完成 | 跨标签进度共享（BroadcastChannel）+ 虚拟滚动（>80 行启用）+ 解密错误分类 + 响应式设计 6 段媒体查询 |
-| v16+ | ⏳ 待做 | 7z 完整支持（7z-wasm）、Worker 加密移到后台线程、切片完整性校验（SHA-256 manifest） |
+| v16 | ✅ 完成 | i18n 双语 store（zh 默认，localStorage 记忆）+ 字体三级分级（display/body/mono + tnum/zero 特性） |
+| v17 | ✅ 完成 | Split/Merge 全量 i18n：字典 130+ key，变量插值 {name}/{size}/{minMem}/{n}；aria-label 双语 |
+| v18+ | ⏳ 待做 | 7z 完整支持（7z-wasm）、Worker 加密移到后台线程、切片完整性校验（SHA-256 manifest）、面板内错误兜底 UI |
 
 ## 6. 已修复的坑（防止回归）
 
@@ -230,10 +232,11 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 
 ## 8. 测试基线
 
-- 13 个测试文件，90 个用例（vitest + jsdom + @testing-library/react）
-- 协议级（crypto/merge/split/stream-split/stream-merge/resume/archive/decrypt-error/progress-meter）常跑
+- 14 个测试文件，97 个用例（vitest + jsdom + @testing-library/react）
+- 协议级（crypto/merge/split/stream-split/stream-merge/resume/archive/decrypt-error/progress-meter/i18n）常跑
 - WASM e2e 默认跳过（jsdom 兼容性边界）
 - 加密估算 `estimateEncryptedSize(plainSize, chunkSize)` 5 例覆盖边界
 - archive 模块 11 例覆盖魔数识别 / ZIP 往返 / 切片过滤 / 命名建议
 - decrypt-error 7 例覆盖魔数错/长度残缺/版本不支持/密码错误分类
 - progress-meter 5 例覆盖累计/百分比/ETA 计算
+- i18n 7 例覆盖默认中文/切换/持久化/未知 key/双语字典完整性
