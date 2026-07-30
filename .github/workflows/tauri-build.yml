@@ -111,7 +111,71 @@ jobs:
         run: |
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">Slicer</string>|' src-tauri/gen/android/app/src/main/res/values/strings.xml
           sed -i 's|"com\.tauri\.dev"|"com.slicer.app"|g' src-tauri/gen/android/app/src/main/AndroidManifest.xml
-        # the sed patterns above are best-effort; verify with grep after
+
+      # 签名：android init 每次重建 gen/，所以 keystore + gradle 补丁都在 init 之后做。
+      # Secrets: ANDROID_KEY_BASE64 / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+      - name: Setup Android signing
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEY_BASE64" ]; then
+            echo "::error::ANDROID_KEY_BASE64 secret missing"
+            exit 1
+          fi
+          echo "$ANDROID_KEY_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          # keystore.properties 给 Gradle signingConfigs 用（Tauri 官方路径）
+          cat > src-tauri/gen/android/keystore.properties <<EOF
+          keyAlias=${ANDROID_KEY_ALIAS}
+          password=${ANDROID_KEY_PASSWORD}
+          storeFile=$RUNNER_TEMP/keystore.jks
+          EOF
+          # 补丁 app/build.gradle.kts：加 release signingConfig
+          APP_GRADLE="src-tauri/gen/android/app/build.gradle.kts"
+          if [ -f "$APP_GRADLE" ]; then
+            # 顶部 import（若无）
+            grep -q 'java.io.FileInputStream' "$APP_GRADLE" || sed -i '1i import java.io.FileInputStream\nimport java.util.Properties' "$APP_GRADLE"
+            # 在 buildTypes 前插入 signingConfigs（若无）
+            if ! grep -q 'signingConfigs' "$APP_GRADLE"; then
+              python3 - <<'PY'
+          from pathlib import Path
+          p = Path("src-tauri/gen/android/app/build.gradle.kts")
+          t = p.read_text()
+          block = '''
+              signingConfigs {
+                  create("release") {
+                      val keystorePropertiesFile = rootProject.file("keystore.properties")
+                      val keystoreProperties = Properties()
+                      if (keystorePropertiesFile.exists()) {
+                          keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+                      }
+                      keyAlias = keystoreProperties["keyAlias"] as String
+                      keyPassword = keystoreProperties["password"] as String
+                      storeFile = file(keystoreProperties["storeFile"] as String)
+                      storePassword = keystoreProperties["password"] as String
+                  }
+              }
+          '''
+          # 插到 android { 内、buildTypes 之前
+          needle = "buildTypes {"
+          if needle in t and "signingConfigs" not in t:
+              t = t.replace(needle, block + "\n    " + needle, 1)
+          # release buildType 挂上 signingConfig
+          import re
+          t2 = re.sub(
+              r'(getByName\("release"\)\s*\{)',
+              r'\1\n            signingConfig = signingConfigs.getByName("release")',
+              t,
+              count=1,
+          )
+          p.write_text(t2)
+          print("patched build.gradle.kts")
+          print(p.read_text()[:2000])
+          PY
+            fi
+          fi
+          ls -la "$RUNNER_TEMP/keystore.jks" src-tauri/gen/android/keystore.properties
 
       # 根因：Maven Central 对 GHA 出口 429；但 kotlin-dsl 插件只在
       # gradlePluginPortal()，不能只用 GCS。策略：
@@ -220,9 +284,41 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 上传 arm64 release APK，并删掉历史 universal debug 大包（若还在）
-          find src-tauri/gen/android -name '*.apk' -type f -print0 | xargs -0 -r gh release upload "${{ github.ref_name }}" --clobber
-          gh release delete-asset "${{ github.ref_name }}" app-universal-debug.apk --yes 2>/dev/null || true
+          # 优先上传已签名 APK，并删掉 unsigned 与历史 debug 大包
+          mapfile -t apks < <(find src-tauri/gen/android -name '*.apk' -type f | sort)
+          echo "found APKs:"
+          printf '  %s\n' "${apks[@]}"
+          # 重命名成友好文件名再上传
+          for f in "${apks[@]}"; do
+            base=$(basename "$f")
+            # 跳过明显的 intermediate
+            case "$base" in
+              *unsigned*)
+                # 若同目录有已签名版本则跳过 unsigned
+                signed_candidate="${f/-unsigned/}"
+                if [ -f "$signed_candidate" ]; then
+                  echo "skip unsigned (signed exists): $base"
+                  continue
+                fi
+                # 没签上就也上传，但标名提醒
+                out="Slicer_0.19.0_arm64-unsigned.apk"
+                ;;
+              *)
+                out="Slicer_0.19.0_arm64.apk"
+                ;;
+            esac
+            # 用实际 tag 版本号
+            ver="${{ github.ref_name }}"
+            ver="${ver#v}"
+            out="Slicer_${ver}_arm64.apk"
+            case "$base" in *unsigned*) out="Slicer_${ver}_arm64-unsigned.apk";; esac
+            cp -f "$f" "/tmp/$out"
+            gh release upload "${{ github.ref_name }}" "/tmp/$out" --clobber
+          done
+          # 清掉旧资产
+          for stale in app-universal-debug.apk app-arm64-release-unsigned.apk; do
+            gh release delete-asset "${{ github.ref_name }}" "$stale" --yes 2>/dev/null || true
+          done
 
   build-html-zip:
     name: HTML portable .zip
@@ -246,12 +342,16 @@ jobs:
 
       - name: Zip dist/ as portable HTML bundle
         run: |
+          ver="${{ github.ref_name }}"
+          ver="${ver#v}"
           cd app/dist
-          zip -r slicer-html-portable.zip ./*
+          zip -r "Slicer_${ver}_html-portable.zip" ./*
 
       - name: Upload zip to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: app/dist/slicer-html-portable.zip
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="${{ github.ref_name }}"
+          ver="${ver#v}"
+          gh release upload "$ver" "app/dist/Slicer_${ver}_html-portable.zip" --clobber
+          gh release delete-asset "${{ github.ref_name }}" slicer-html-portable.zip --yes 2>/dev/null || true
