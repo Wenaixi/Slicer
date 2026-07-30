@@ -1,4 +1,4 @@
-﻿node_modules
+node_modules
 dist
 .omc
 app/.omc
@@ -6,3 +6,7 @@ app/dist
 app/node_modules
 *.log
 
+# Tauri (v19)
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
