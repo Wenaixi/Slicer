@@ -112,101 +112,32 @@ jobs:
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">Slicer</string>|' src-tauri/gen/android/app/src/main/res/values/strings.xml
           sed -i 's|"com\.tauri\.dev"|"com.slicer.app"|g' src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
-      # 签名：android init 每次重建 gen/，所以 keystore + gradle 补丁都在 init 之后做。
+      # 签名：只解码 keystore；构建后用 apksigner 签（不依赖 Gradle signingConfigs）。
       # Secrets: ANDROID_KEY_BASE64 / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
-      # 备选：若 Gradle 签名配置失败，构建后用 apksigner 兜底签。
-      - name: Setup Android signing
+      - name: Setup Android signing keystore
         env:
           ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          set -e
-          if [ -z "$ANDROID_KEY_BASE64" ]; then
+          set -euo pipefail
+          if [ -z "${ANDROID_KEY_BASE64:-}" ]; then
             echo "::error::ANDROID_KEY_BASE64 secret missing"
             exit 1
           fi
-          # 写 base64 到文件再 decode，避免 echo 管道/换行问题
-          printf '%s' "$ANDROID_KEY_BASE64" | tr -d '\r\n ' > "$RUNNER_TEMP/key.b64"
-          base64 -d "$RUNNER_TEMP/key.b64" > "$RUNNER_TEMP/keystore.jks"
-          # 校验 jks 魔数（JKS 以 0xFEEDFEED 开头，PKCS12 以 0x30）
-          sz=$(wc -c < "$RUNNER_TEMP/keystore.jks")
-          echo "keystore size=$sz"
-          test "$sz" -gt 100 || { echo "::error::keystore too small"; exit 1; }
-
-          # keystore.properties —— 注意 heredoc 不要缩进，Properties 解析会带空格
-          cat > src-tauri/gen/android/keystore.properties <<EOF
-          keyAlias=${ANDROID_KEY_ALIAS}
-          password=${ANDROID_KEY_PASSWORD}
-          storeFile=${RUNNER_TEMP}/keystore.jks
-          EOF
-          # 上面 EOF 内容若被 YAML 缩进污染，用 sed 去前导空格
-          sed -i 's/^[[:space:]]*//' src-tauri/gen/android/keystore.properties
-          echo "=== keystore.properties (keys only) ==="
-          cut -d= -f1 src-tauri/gen/android/keystore.properties
-
-          APP_GRADLE="src-tauri/gen/android/app/build.gradle.kts"
-          test -f "$APP_GRADLE" || { echo "::error::missing $APP_GRADLE"; exit 1; }
-
-          # 顶部 import
-          grep -q 'java.io.FileInputStream' "$APP_GRADLE" \
-            || sed -i '1i import java.io.FileInputStream\nimport java.util.Properties' "$APP_GRADLE"
-
-          # 用独立 python 文件避免 YAML/heredoc 缩进把代码搞坏
-          cat > "$RUNNER_TEMP/patch_signing.py" <<'PY'
-          from pathlib import Path
-          import re
-          p = Path("src-tauri/gen/android/app/build.gradle.kts")
-          t = p.read_text()
-          if "signingConfigs" not in t:
-              block = '''
-              signingConfigs {
-                  create("release") {
-                      val keystorePropertiesFile = rootProject.file("keystore.properties")
-                      val keystoreProperties = Properties()
-                      if (keystorePropertiesFile.exists()) {
-                          keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-                      }
-                      keyAlias = keystoreProperties["keyAlias"] as String
-                      keyPassword = keystoreProperties["password"] as String
-                      storeFile = file(keystoreProperties["storeFile"] as String)
-                      storePassword = keystoreProperties["password"] as String
-                  }
-              }
-          '''
-              needle = "buildTypes {"
-              if needle not in t:
-                  raise SystemExit("buildTypes { not found in build.gradle.kts")
-              t = t.replace(needle, block + "\n    " + needle, 1)
-          if 'signingConfig = signingConfigs.getByName("release")' not in t:
-              t2, n = re.subn(
-                  r'(getByName\("release"\)\s*\{)',
-                  r'\1\n            signingConfig = signingConfigs.getByName("release")',
-                  t,
-                  count=1,
-              )
-              if n == 0:
-                  raise SystemExit('getByName("release") not found')
-              t = t2
-          p.write_text(t)
-          print("patched OK")
-          # 打印 signing 相关片段
-          for i, line in enumerate(t.splitlines(), 1):
-              if "signing" in line.lower() or "keystore" in line.lower() or "release" in line:
-                  print(f"{i:4d}: {line}")
-          PY
-          # 去掉 python 文件前导缩进（YAML 写入时带了）
-          python3 -c "
-          from pathlib import Path
-          p = Path('$RUNNER_TEMP/patch_signing.py')
-          lines = p.read_text().splitlines()
-          # 找最小非空缩进
-          indents = [len(l) - len(l.lstrip(' ')) for l in lines if l.strip()]
-          m = min(indents) if indents else 0
-          p.write_text('\n'.join(l[m:] if len(l) >= m else l for l in lines) + '\n')
-          "
-          python3 "$RUNNER_TEMP/patch_signing.py"
-          ls -la "$RUNNER_TEMP/keystore.jks" src-tauri/gen/android/keystore.properties
+          echo "secret char length=${#ANDROID_KEY_BASE64}"
+          # 清洗后写文件，python 解码（coreutils base64 对 padding/空白更挑剔）
+          printf '%s' "$ANDROID_KEY_BASE64" | tr -cd 'A-Za-z0-9+/=' > "$RUNNER_TEMP/key.b64"
+          echo "cleaned b64 bytes=$(wc -c < "$RUNNER_TEMP/key.b64")"
+          python3 -c 'import base64,os,pathlib,sys
+          p=pathlib.Path(os.environ["RUNNER_TEMP"])/"key.b64"
+          s=p.read_text(encoding="ascii").strip()
+          s+="="*((-len(s))%4)
+          d=base64.b64decode(s)
+          out=pathlib.Path(os.environ["RUNNER_TEMP"])/"keystore.jks"
+          out.write_bytes(d)
+          print(f"keystore size={len(d)} magic={d[:4].hex()} format={'PKCS12' if d[:1]==b\"\\x30\" else \"other\"}")
+          sys.exit(0 if len(d)>100 else 1)'
+          ls -la "$RUNNER_TEMP/keystore.jks"
+          echo "keystore ready"
 
       # 根因：Maven Central 对 GHA 出口 429；但 kotlin-dsl 插件只在
       # gradlePluginPortal()，不能只用 GCS。策略：
