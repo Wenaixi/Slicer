@@ -351,7 +351,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ver="${{ github.ref_name }}"
-          ver="${ver#v}"
-          gh release upload "$ver" "app/dist/Slicer_${ver}_html-portable.zip" --clobber
-          gh release delete-asset "${{ github.ref_name }}" slicer-html-portable.zip --yes 2>/dev/null || true
+          tag="${{ github.ref_name }}"
+          ver="${tag#v}"
+          gh release upload "$tag" "app/dist/Slicer_${ver}_html-portable.zip" --clobber
+          gh release delete-asset "$tag" slicer-html-portable.zip --yes 2>/dev/null || true
