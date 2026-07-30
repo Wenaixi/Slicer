@@ -151,6 +151,7 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 
 - 注释全简体中文；公开 API 用 TSDoc 块注释
 - 纯逻辑放 `src/lib/`（无 React 依赖，可单测）；组件只做组合与交互
+- React hook wrapper 放 `src/components/hooks/`（例如 `useAppState`/`useToasts`/`useLocale`/`useVirtualWindow`/`usePanelErrors`）：包一层 `useSyncExternalStore` 或副作用后调用 `lib/` 的纯函数，禁止在 `lib/` 内 `import 'react'`
 - 状态优先用 `useSyncExternalStore` 手写 store；不引 Redux/Zustand 等依赖
 - 不加未要求的依赖（ponytail：能用原生就不用库）
 
