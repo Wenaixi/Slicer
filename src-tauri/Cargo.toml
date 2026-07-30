@@ -20,3 +20,11 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.11.3", features = [] }
+
+# Linux-only: WebKitGTK lacks secure context for the default scheme, so we
+# serve the bundled assets over http://localhost:<port> via tauri-plugin-localhost
+# to unlock window.crypto.subtle. No-op on Windows/macOS where the platform
+# scheme is already considered secure.
+[target.'cfg(target_os = "linux")'.dependencies]
+tauri-plugin-localhost = "2"
+portpicker = "0.1"
