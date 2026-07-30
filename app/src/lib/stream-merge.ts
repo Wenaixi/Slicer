@@ -20,8 +20,11 @@ export class StreamMergeError extends Error {
 }
 
 export interface StreamMergeHandlers {
-  /** 产出一个明文块（Blob）；index 从 0 起 */
-  onPlainChunk: (chunk: { index: number; blob: Blob; bytes: number }) => void
+  /**
+   * 产出一个明文块（Blob）。签名约定为 async：消费方可对 handle/可写流做 await，
+   * 写盘错误能直接上抛，由外层 catch 统一兜底。index 从 0 起。
+   */
+  onPlainChunk: (chunk: { index: number; blob: Blob; bytes: number }) => Promise<void>
   /** 进度回调：index=当前切片序号；bytesDone=累计明文字节；bytesTotal=预估总明文字节 */
   onProgress: (p: { index: number; total: number; bytesDone: number; bytesTotal: number }) => void
   /** 中断探测 */
@@ -92,7 +95,8 @@ export async function streamMerge(
     bytesDone += plainBytes.byteLength
     // 物化为 Blob 时用 .buffer as ArrayBuffer 规避 SharedArrayBuffer 类型推断
     const blob = new Blob([plainBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' })
-    onPlainChunk({ index: i, blob, bytes: plainBytes.byteLength })
+    // onPlainChunk 约定 async：消费方写盘错误直接上抛，由外层 catch 统一兜底
+    await onPlainChunk({ index: i, blob, bytes: plainBytes.byteLength })
     onProgress({ index: i + 1, total, bytesDone, bytesTotal: totalOutSize })
     mergedParts++
 

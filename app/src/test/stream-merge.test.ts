@@ -19,7 +19,7 @@ describe('streamMerge', () => {
       { encrypted: false, bytesTotal: 6 },
       {
         shouldAbort: () => false,
-        onPlainChunk: ({ blob }) => {
+        onPlainChunk: async ({ blob }) => {
           chunks += 1
           bytes += blob.size
         },
@@ -42,7 +42,7 @@ describe('streamMerge', () => {
         { encrypted: false, bytesTotal: 2 },
         {
           shouldAbort: () => aborted,
-          onPlainChunk: () => {
+          onPlainChunk: async () => {
             aborted = true
           },
           onProgress: () => {},
@@ -60,7 +60,7 @@ describe('streamMerge', () => {
         { encrypted: true, password: '', bytesTotal: 4 },
         {
           shouldAbort: () => false,
-          onPlainChunk: () => {},
+          onPlainChunk: async () => {},
           onProgress: () => {},
         },
       ),
@@ -73,7 +73,7 @@ describe('streamMerge', () => {
       { encrypted: false, bytesTotal: 0 },
       {
         shouldAbort: () => false,
-        onPlainChunk: () => {},
+        onPlainChunk: async () => {},
         onProgress: () => {},
       },
     )
@@ -92,7 +92,7 @@ describe('streamMerge', () => {
       { encrypted: false, bytesTotal: 3072 },
       {
         shouldAbort: () => false,
-        onPlainChunk: () => {},
+        onPlainChunk: async () => {},
         onProgress: ({ bytesDone }) => progresses.push(bytesDone),
       },
     )

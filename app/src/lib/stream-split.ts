@@ -33,7 +33,11 @@ export interface StreamSplitProgress {
 }
 
 export interface StreamSplitHandlers {
-  onChunk: (chunk: SplitChunkOut) => void
+  /**
+   * 切片产出回调。签名约定为 async：消费方（直写磁盘、广播、saveProgress）可串行 await，
+   * 写盘错误能直接上抛，由外层 catch 统一兜底。
+   */
+  onChunk: (chunk: SplitChunkOut) => Promise<void>
   onProgress: (p: StreamSplitProgress) => void
   shouldAbort: () => boolean
 }
@@ -104,7 +108,8 @@ export async function streamSplit(
 
       totalOutSize += outBlob.size
       handledParts++
-      onChunk({ index, name: outName, blob: outBlob })
+      // onChunk 约定 async：消费方写盘/广播错误能直接上抛
+      await onChunk({ index, name: outName, blob: outBlob })
       onProgress({ index, total: totalParts, bytesDone: end, bytesTotal: file.size, phase: 'slice' })
 
       if (index % 8 === 0) await new Promise((r) => setTimeout(r, 0))
