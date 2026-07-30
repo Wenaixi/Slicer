@@ -11,6 +11,7 @@ import { streamMerge, StreamMergeError } from '../lib/stream-merge'
 import { kindLabel } from '../lib/decrypt-error'
 import { detectArchiveKind, unzipAll, filterChunkEntries } from '../lib/archive'
 import { useVirtualWindow } from '../lib/virtualize'
+import { useLocale, t } from '../lib/i18n'
 
 /** webkit 文件夹拖入：把目录里的所有文件递归拉平成 File[]。非 WebKit 静默返回 [f]。 */
 async function flattenIfDirectory(file: File): Promise<File[]> {
@@ -77,14 +78,14 @@ async function expandIncoming(
         const head = new Uint8Array(await f.slice(0, 6).arrayBuffer())
         const kind = detectArchiveKind(head)
         if (kind === '7z') {
-          toast(`「${f.name}」是 7z 格式，暂不支持，请改用 ZIP 重新打包`, 'error')
+          toast(`「${f.name}」${t('merge.toast.zip7z')}`, 'error')
           continue
         }
         if (kind === 'zip') {
           const entries = await unzipAll(f)
           const chunks = filterChunkEntries(entries)
           if (chunks.length === 0) {
-            toast(`「${f.name}」里没有识别到切片文件`, 'info')
+            toast(`「${f.name}」${t('merge.toast.zipNoChunks')}`, 'info')
             continue
           }
           // 保留 ZIP 内完整相对路径作为 name，让 groupMergeFiles 按目录前缀（= 原压缩包/文件夹）分组
@@ -111,14 +112,14 @@ async function expandIncoming(
             }
             return next
           })
-          toast(`已从「${f.name}」解压 ${chunks.length} 个切片`, 'info')
+          toast(t('merge.toast.zipDone', { name: f.name, n: chunks.length }), 'info')
           continue
         }
         // unknown：当作普通文件
         direct.push(f)
       } catch (err) {
         toast(
-          `「${f.name}」处理失败：${err instanceof Error ? err.message : '未知错误'}`,
+          `「${f.name}」${t('merge.toast.zipFail')}：${err instanceof Error ? err.message : 'unknown'}`,
           'error',
         )
       }
@@ -146,6 +147,7 @@ async function expandIncoming(
 
 export function MergePanel() {
   const { tab } = useAppState()
+  useLocale()
   const [files, setFiles] = useState<File[]>([])
   const [password, setPassword] = useState('')
   const [decrypting, setDecrypting] = useState(false)
@@ -166,7 +168,7 @@ export function MergePanel() {
   const handleGlobalDrop = useCallback(async (incoming: File[]) => {
     if (incoming.length === 0) return
     const expanded = await expandIncoming(incoming, setFiles)
-    if (expanded > 0) toast(`已识别并追加 ${expanded} 个切片`, 'success')
+    if (expanded > 0) toast(`${t('merge.toast.appended')} ${expanded} ${t('merge.chunks')}`, 'success')
   }, [])
 
   useEffect(() => {
@@ -186,8 +188,8 @@ export function MergePanel() {
   const addFiles = async (incoming: File[]) => {
     if (incoming.length === 0) return
     const added = await expandIncoming(incoming, setFiles)
-    if (added === 0) toast('文件已在队列中（按名称+大小+时间去重）', 'info')
-    else toast(`已识别并追加 ${added} 个切片`, 'success')
+    if (added === 0) toast(t('merge.toast.dup'), 'info')
+    else toast(`${t('merge.toast.appended')} ${added} ${t('merge.chunks')}`, 'success')
   }
 
   const removeFile = (name: string) => {
@@ -213,13 +215,13 @@ export function MergePanel() {
     if (group.items.length === 0) return
     setDecrypting(true)
     setProgress(0)
-    setProgressLabel(group.encrypted ? '解密中…' : '合并中…')
+    setProgressLabel(group.encrypted ? `${t('merge.phase.decrypting')}…` : `${t('merge.phase.merging')}…`)
 
     let folderHandle: { write: (d: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void>; name: string; fullPath: string } | null = null
     if (mode === 'saveToFolder') {
       folderHandle = await pickFolderAndCreateFile(group.baseName)
       if (!folderHandle) {
-        toast('当前浏览器不支持文件夹直写，已降级为保存文件', 'info')
+        toast(t('merge.toast.noDir'), 'info')
       }
     }
     const useStreamingFolder = !!folderHandle
@@ -231,7 +233,7 @@ export function MergePanel() {
       fileHandle = await pickSaveLocation(group.baseName)
       if (!fileHandle) {
         // 不支持 pickSaveLocation，降级为内存下载
-        toast('当前浏览器不支持保存到文件，已改为直接下载', 'info')
+        toast(t('merge.toast.noSave'), 'info')
       }
     }
     const useDirectFile = !!fileHandle
@@ -239,12 +241,12 @@ export function MergePanel() {
     // 密码前置校验
     if (group.encrypted) {
       if (!password) {
-        toast('请先输入密码', 'error')
+        toast(t('merge.toast.pw'), 'error')
         setDecrypting(false)
         return
       }
       if (password.length < 8) {
-        toast('密码至少 8 位', 'error')
+        toast(t('merge.toast.pwLength'), 'error')
         setDecrypting(false)
         return
       }
@@ -292,7 +294,7 @@ export function MergePanel() {
           },
           onProgress: ({ index, total, bytesDone, bytesTotal }) => {
             setProgressLabel(
-              group.encrypted ? `解密 ${index}/${total}` : `合并 ${index}/${total}`,
+              group.encrypted ? `${t('merge.phase.decrypting')} ${index}/${total}` : `${t('merge.phase.merging')} ${index}/${total}`,
             )
             setProgress(bytesTotal > 0 ? (bytesDone / bytesTotal) * 95 : (index / total) * 95)
           },
@@ -304,7 +306,7 @@ export function MergePanel() {
         await folderHandle.close()
         setProgress(100)
         toast(
-          `已逐块写入 ${folderHandle.fullPath} · ${formatBytes(summary.totalOutSize)}（流式，内存峰值 ≈ 单切片大小）`,
+          `${t('merge.toast.wroteFolder')} ${folderHandle.fullPath} · ${formatBytes(summary.totalOutSize)}`,
           'success',
         )
         return
@@ -312,7 +314,7 @@ export function MergePanel() {
       if (fileHandle) {
         await fileHandle.close()
         setProgress(100)
-        toast(`已逐块写入 ${fileHandle.name} · ${formatBytes(summary.totalOutSize)}`, 'success')
+        toast(`${t('merge.toast.wroteFile')} ${fileHandle.name} · ${formatBytes(summary.totalOutSize)}`, 'success')
         return
       }
 
@@ -323,8 +325,8 @@ export function MergePanel() {
       downloadBlob(merged, group.baseName)
       toast(
         group.encrypted
-          ? `解密并合并完成 · ${formatBytes(memoryBytes)}`
-          : `合并完成 · ${formatBytes(memoryBytes)}`,
+          ? `${t('merge.toast.mergedDec')} · ${formatBytes(memoryBytes)}`
+          : `${t('merge.toast.merged')} · ${formatBytes(memoryBytes)}`,
         'success',
       )
       void memoryBytes
@@ -332,7 +334,7 @@ export function MergePanel() {
       void useDirectFile
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
-        toast('已取消', 'info')
+        toast(t('merge.toast.cancelled'), 'info')
         return
       }
       // 解密错误分类提示：「密码错误 vs 文件损坏」
@@ -346,7 +348,7 @@ export function MergePanel() {
         }
         return
       }
-      const msg = err instanceof Error ? err.message : '合并失败'
+      const msg = err instanceof Error ? err.message : t('merge.toast.fail')
       toast(msg, 'error')
     } finally {
       setDecrypting(false)
@@ -358,8 +360,8 @@ export function MergePanel() {
   return (
     <section className="space-y-6">
       <DropZone
-        title="拖拽切片文件到此处"
-        hint="支持分批多次追加；支持直接拖入 ZIP 压缩包（自动解压并识别切片）；支持多个 ZIP；7z 暂不支持请改用 ZIP"
+        title={t('merge.drop.title')}
+        hint={t('merge.drop.hint')}
         onFiles={addFiles}
         multiple
       />
@@ -369,7 +371,7 @@ export function MergePanel() {
           <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <path d="M21 12a9 9 0 1 1-6.219-8.56" />
           </svg>
-          正在解压 ZIP / 识别切片…
+          {t('merge.extracting')}
         </div>
       )}
 
@@ -378,14 +380,14 @@ export function MergePanel() {
           <div className="border border-zinc-800 light:border-zinc-200 bg-zinc-900 light:bg-white p-4 flex flex-col sm:flex-row items-center justify-between gap-3 transition-fast">
             <div className="flex items-center gap-2 font-mono text-xs">
               <span className="w-2 h-2 bg-emerald-400 pulse-dot" />
-              <span className="font-bold">已载入 {files.length} 个切片</span>
-              <span className="text-zinc-500">· 可继续拖入更多</span>
+              <span className="font-bold">{t('merge.loaded')} {files.length} {t('merge.chunks')}</span>
+              <span className="text-zinc-500">· {t('merge.append')}</span>
             </div>
             <button
               onClick={clearAll}
               className="text-xs font-mono text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-700 underline underline-offset-2 transition-fast"
             >
-              清空
+              {t('merge.clear')}
             </button>
           </div>
 
@@ -458,23 +460,23 @@ function GroupCard({
             <h3 className="font-bold font-mono text-sm truncate">{group.baseName}</h3>
             {!group.sequential && (
               <span className="px-2 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] font-mono">
-                非连续
+                {t('merge.group.badge.nonseq')}
               </span>
             )}
             {group.sequential && group.items.length > 1 && (
               <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-mono">
-                序号完整
+                {t('merge.group.badge.seq')}
               </span>
             )}
             {group.encrypted && (
               <span className="px-2 py-0.5 bg-blue-500/10 text-blue-400 border border-blue-500/30 text-[10px] font-mono">
-                加密
+                {t('merge.group.badge.enc')}
               </span>
             )}
           </div>
           <p className="text-xs font-mono text-zinc-500 mt-1">
-            {group.items.length} 个切片 · 合计 {formatBytes(group.totalSize)}
-            {group.missing.length > 0 && ` · 缺失 #${group.missing.slice(0, 5).join(', #')}${group.missing.length > 5 ? '…' : ''}`}
+            {group.items.length} {t('merge.chunks')} · {t('split.result.total')} {formatBytes(group.totalSize)}
+            {group.missing.length > 0 && ` · ${t('merge.group.missing')} #${group.missing.slice(0, 5).join(', #')}${group.missing.length > 5 ? '…' : ''}`}
           </p>
         </div>
 
@@ -484,7 +486,7 @@ function GroupCard({
             disabled={disabled}
             className="px-3 py-1.5 text-xs font-mono text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-800 border border-zinc-800 light:border-zinc-300 transition-fast pressable disabled:opacity-50"
           >
-            移除该组
+            {t('merge.group.remove')}
           </button>
           {onSaveToFolder && (
             <button
@@ -495,9 +497,9 @@ function GroupCard({
                   ? 'text-zinc-500 cursor-not-allowed'
                   : 'text-zinc-200 light:text-zinc-700 hover:border-zinc-500'
               }`}
-              title="流式写入用户选择的文件夹，内存峰值 ≈ 单切片大小（最适合加密大文件）"
+              title={t('merge.group.saveFolderHint')}
             >
-              保存到文件夹…
+              {t('merge.group.saveFolder')}
             </button>
           )}
           {onSaveToFile && (
@@ -509,9 +511,9 @@ function GroupCard({
                   ? 'text-zinc-500 cursor-not-allowed'
                   : 'text-zinc-200 light:text-zinc-700 hover:border-zinc-500'
               }`}
-              title="直接写入文件系统（需浏览器授权）"
+              title={t('merge.group.saveFileHint')}
             >
-              保存到文件…
+              {t('merge.group.saveFile')}
             </button>
           )}
           <button
@@ -523,7 +525,7 @@ function GroupCard({
                 : 'bg-zinc-100 text-zinc-950 light:bg-zinc-900 light:text-zinc-50'
             }`}
           >
-            {needsPassword ? '解密并合并下载' : '合并并下载'}
+            {needsPassword ? t('merge.group.execEnc') : t('merge.group.exec')}
           </button>
         </div>
       </div>
@@ -615,7 +617,7 @@ function GroupItemRow({
         onClick={onRemove}
         disabled={disabled}
         className="text-zinc-500 hover:text-zinc-200 light:hover:text-zinc-700 font-bold px-2 transition-fast disabled:opacity-50"
-        aria-label={`移除 ${item.originalName}`}
+        aria-label={`${t('merge.remove')} ${item.originalName}`}
       >
         ✕
       </button>

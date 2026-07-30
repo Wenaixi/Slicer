@@ -20,6 +20,7 @@ import {
 import { broadcastProgress, subscribeProgress, type CrossTabProgressEvent } from '../lib/cross-tab'
 import { createMeter, recordChunk, estimateEtaSeconds, type ProgressMeter } from '../lib/progress-meter'
 import { useVirtualWindow } from '../lib/virtualize'
+import { useLocale, t } from '../lib/i18n'
 
 interface ChunkResult {
   name: string
@@ -31,6 +32,7 @@ interface ChunkResult {
 
 export function SplitPanel() {
   const { tab } = useAppState()
+  useLocale() // 订阅语言切换触发重渲染
   const [file, setFile] = useState<File | null>(null)
   const [options, setOptions] = useState<SplitOptions>(DEFAULT_SPLIT_OPTIONS)
   const [confirmPw, setConfirmPw] = useState('')
@@ -78,7 +80,7 @@ export function SplitPanel() {
     setCompletedIndices(new Set(resumableSaved.completedIndices))
     setResumeMode(true)
     setResumableSaved(null)
-    toast(`已恢复进度：续传 ${resumableSaved.completedIndices.length} 个已完成切片之后的余下部分`, 'info')
+    toast(`${t('split.toast.resumeFound')} ${resumableSaved.completedIndices.length} ${t('split.toast.resumeSkip')}`, 'info')
   }
 
   const startFreshSplit = () => {
@@ -93,7 +95,7 @@ export function SplitPanel() {
     if (files.length === 0) return
     setFile(files[0])
     setResults([])
-    toast(`已加载 ${files[0].name}`, 'success')
+    toast(`${t('split.toast.loaded')} ${files[0].name}`, 'success')
   }, [])
 
   useEffect(() => {
@@ -124,7 +126,7 @@ export function SplitPanel() {
     if (files.length === 0) return
     setFile(files[0])
     setResults([])
-    toast(`已加载 ${files[0].name}`, 'success')
+    toast(`${t('split.toast.loaded')} ${files[0].name}`, 'success')
   }
 
   const reset = () => {
@@ -138,7 +140,7 @@ export function SplitPanel() {
   const executeSplit = async () => {
     if (!file || processing) return
     if (options.encrypt && (options.password.length < 8 || options.password !== confirmPw)) {
-      toast('请确认密码：至少 8 位且两次输入一致', 'error')
+      toast(t('split.toast.confirmPassword'), 'error')
       return
     }
 
@@ -157,7 +159,7 @@ export function SplitPanel() {
           throw err
         }
       } else {
-        toast('当前浏览器不支持目录选择，已降级为内存模式', 'info')
+        toast(t('split.toast.noDir'), 'info')
         if (directToDisk) setDirectToDisk(false)
         if (resumeMode) setResumeMode(false)
       }
@@ -169,9 +171,9 @@ export function SplitPanel() {
       const resumePlan = await probeResumePlan(dirHandle, file.name, options, plan.totalParts)
       if (resumePlan.resumable) {
         skipIndices = new Set(resumePlan.completedIndices)
-        toast(`探测到 ${resumePlan.completedIndices.length} 个已完成切片，跳过续传`, 'info')
+        toast(`${t('split.toast.resumeFound')} ${resumePlan.completedIndices.length} ${t('split.toast.resumeSkip')}`, 'info')
       } else {
-        toast('未发现可续传切片，从头开始', 'info')
+        toast(t('split.toast.resumeNone'), 'info')
       }
     }
 
@@ -255,12 +257,12 @@ export function SplitPanel() {
             setProgress((p.bytesDone / Math.max(1, p.bytesTotal)) * 100)
             setProgressLabel(
               p.phase === 'derive'
-                ? 'Argon2id 派生密钥…'
+                ? t('split.phase.derive')
                 : p.phase === 'encrypt'
-                ? `加密切片 ${p.index}/${p.total}`
+                ? `${t('split.phase.encrypt')} ${p.index}/${p.total}`
                 : p.phase === 'skip'
-                ? `跳过已完成 ${p.index}/${p.total}`
-                : `切片 ${p.index}/${p.total}`,
+                ? `${t('split.phase.skip')} ${p.index}/${p.total}`
+                : `${t('split.phase.slice')} ${p.index}/${p.total}`,
             )
             // 仪表采样（每切片一次）
             meterState = recordChunk(meterState, p.phase === 'skip' ? 0 : (p.bytesDone - meterState.bytesDone), { skipped: p.phase === 'skip' })
@@ -288,7 +290,7 @@ export function SplitPanel() {
           totalParts,
           timestamp: Date.now(),
         })
-        toast(`已取消（已保存 ${completedSet.size} 个切片进度，下次可续传）`, 'info')
+        toast(`${t('split.toast.abortSave')} ${completedSet.size} ${t('split.toast.abortNext')}`, 'info')
         return
       }
       setResults(chunks)
@@ -306,8 +308,8 @@ export function SplitPanel() {
       })
       toast(
         dirHandle
-          ? `已逐切片写入磁盘（${summary.totalParts} 个${summary.skippedParts ? `，跳过 ${summary.skippedParts} 个续传切片` : ''}）`
-          : `已分割为 ${summary.totalParts} 个切片${summary.encrypted ? '（已加密）' : ''}${summary.skippedParts ? `（跳过 ${summary.skippedParts} 个续传切片）` : ''}`,
+          ? `${t('split.toast.wroteDir')}${summary.totalParts}${summary.skippedParts ? `${t('split.toast.wroteDirSkip')} ${summary.skippedParts}` : ''})`
+          : `${t('split.toast.splitDone')} ${summary.totalParts} ${t('split.preview.chunks')}${summary.encrypted ? t('split.toast.splitEncrypted') : ''}${summary.skippedParts ? `${t('split.toast.wroteDirSkip')} ${summary.skippedParts}` : ''}`,
         'success',
       )
     } catch (err) {
@@ -320,7 +322,7 @@ export function SplitPanel() {
           startedAt: startTime,
           updatedAt: Date.now(),
         })
-        toast(`已取消（已保存 ${completedSet.size} 个切片进度，下次可续传）`, 'info')
+        toast(`${t('split.toast.abortSave')} ${completedSet.size} ${t('split.toast.abortNext')}`, 'info')
         return
       }
       console.error(err)
@@ -335,13 +337,13 @@ export function SplitPanel() {
     if (results.length === 0) return
     const bundle = new Blob(results.map((r) => r.blob), { type: 'application/octet-stream' })
     downloadBlob(bundle, `${file!.name}.sliced.bundle`)
-    toast(`已打包下载 ${results.length} 个切片（按顺序拼接，解压前请记录命名规范）`, 'success')
+    toast(`${t('split.toast.bundleDone')} ${results.length} ${t('split.preview.chunks')}${t('split.toast.bundleHint')}`, 'success')
   }
 
   /** 打包 ZIP 下载：把切片按命名规范塞进单一 ZIP，便于传输与归档 */
   const downloadZip = async () => {
     if (results.length === 0) return
-    toast('正在打包 ZIP…', 'info')
+    toast(t('split.toast.zipPacking'), 'info')
     // 逐块读 arrayBuffer 避免 Blob → Uint8Array 类型转换问题
     const entries = await Promise.all(
       results.map(async (r) => ({
@@ -352,7 +354,7 @@ export function SplitPanel() {
     )
     const zipped = packAsZip(entries)
     downloadBlob(zipped, suggestedZipName(file!.name))
-    toast(`已打包为 ZIP（${results.length} 个切片）`, 'success')
+    toast(`${t('split.toast.zipDone')}（${results.length} ${t('split.preview.chunks')}）`, 'success')
   }
 
   const downloadChunk = (idx: number) => {
@@ -365,7 +367,7 @@ export function SplitPanel() {
     results.forEach((_, i) => {
       setTimeout(() => downloadChunk(i), i * 200)
     })
-    toast(`开始下载 ${results.length} 个切片`, 'info')
+    toast(`${t('split.toast.downloadAll')} ${results.length} ${t('split.preview.chunks')}`, 'info')
   }
 
   const totalOutSize = results.reduce((a, b) => a + b.size, 0)
@@ -374,8 +376,8 @@ export function SplitPanel() {
     <section className="space-y-6">
       {!file ? (
         <DropZone
-          title="拖拽单文件到此处"
-          hint="支持任意格式：视频、镜像、文档包。纯本地处理，零上传。"
+          title={t('split.drop.title')}
+          hint={t('split.drop.hint')}
           onFiles={handleFile}
         />
       ) : (
@@ -387,9 +389,9 @@ export function SplitPanel() {
                 <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5" />
               </svg>
               <span>
-                另一个标签页正在分割同一文件 · 已完成 {crossTabEvent.completedIndices.length}/{crossTabEvent.totalParts}
-                {crossTabEvent.kind === 'split-done' && ' · 对方已完成'}
-                {crossTabEvent.kind === 'split-abort' && ' · 对方已取消'}
+                {t('split.crossTab.msg')} · {t('split.meter.handled')} {crossTabEvent.completedIndices.length}/{crossTabEvent.totalParts}
+                {crossTabEvent.kind === 'split-done' && ` · ${t('split.crossTab.done')}`}
+                {crossTabEvent.kind === 'split-abort' && ` · ${t('split.crossTab.abort')}`}
               </span>
             </div>
           )}
@@ -402,8 +404,8 @@ export function SplitPanel() {
                   <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5" />
                 </svg>
                 <span>
-                  检测到上次未完成的「{resumableSaved.fileName}」分割进度
-                  · 已完成 {resumableSaved.completedIndices.length} 个切片
+                  {t('split.resume.banner', { name: resumableSaved.fileName })}
+                  · {t('split.resume.completed')} {resumableSaved.completedIndices.length} {t('split.resume.chunks')}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -411,13 +413,13 @@ export function SplitPanel() {
                   onClick={resumeInterrupt}
                   className="px-3 py-1.5 bg-blue-500/20 text-blue-300 light:text-blue-800 border border-blue-500/40 hover:bg-blue-500/30 transition-fast pressable"
                 >
-                  续传
+                  {t('split.resume.btn')}
                 </button>
                 <button
                   onClick={startFreshSplit}
                   className="px-3 py-1.5 text-zinc-400 light:text-zinc-600 border border-zinc-800 light:border-zinc-300 hover:border-zinc-600 transition-fast pressable"
                 >
-                  重新开始
+                  {t('split.resume.fresh')}
                 </button>
               </div>
             </div>
@@ -430,7 +432,7 @@ export function SplitPanel() {
                 <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
               </svg>
               <div>
-                <strong>大文件提示</strong>：当前文件 {formatBytes(file.size)}。切片将全部驻留内存，建议确保可用内存 ≥ {formatBytes(file.size * 1.5)}。
+                <strong>{t('split.warnLarge.title')}</strong>：{t('split.warnLarge.body', { size: formatBytes(file.size), minMem: formatBytes(file.size * 1.5) })}
               </div>
             </div>
           )}
@@ -444,27 +446,27 @@ export function SplitPanel() {
           {/* 分割参数 */}
           <div className="border border-zinc-800 light:border-zinc-200 bg-zinc-900 light:bg-white p-5 space-y-5">
             <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-400">
-              // 分割参数
+              {t('split.params')}
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <ModeCard
                 active={options.mode === 'size'}
                 onClick={() => setOptions((o) => ({ ...o, mode: 'size' }))}
-                title="按单文件大小"
-                desc="指定每个切片的最大容量"
+                title={t('split.mode.size')}
+                desc={t('split.mode.size.desc')}
               />
               <ModeCard
                 active={options.mode === 'count'}
                 onClick={() => setOptions((o) => ({ ...o, mode: 'count' }))}
-                title="按目标份数"
-                desc="自动均分为固定数量"
+                title={t('split.mode.count')}
+                desc={t('split.mode.count.desc')}
               />
             </div>
 
             {options.mode === 'size' ? (
               <div className="space-y-2">
-                <label className="text-xs font-mono text-zinc-500 block">单个切片大小</label>
+                <label className="text-xs font-mono text-zinc-500 block">{t('split.size.label')}</label>
                 <div className="flex gap-2">
                   <input
                     type="number"
@@ -507,7 +509,7 @@ export function SplitPanel() {
               </div>
             ) : (
               <div className="space-y-2">
-                <label className="text-xs font-mono text-zinc-500 block">切片份数</label>
+                <label className="text-xs font-mono text-zinc-500 block">{t('split.count.label')}</label>
                 <input
                   type="number"
                   min={2}
@@ -522,7 +524,7 @@ export function SplitPanel() {
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-mono text-zinc-500 block">命名规范</label>
+              <label className="text-xs font-mono text-zinc-500 block">{t('split.naming.label')}</label>
               <select
                 value={options.naming}
                 onChange={(e) =>
@@ -530,27 +532,27 @@ export function SplitPanel() {
                 }
                 className="w-full bg-zinc-950 light:bg-zinc-50 border border-zinc-800 light:border-zinc-300 px-4 py-2 text-sm font-mono focus:outline-none focus:border-zinc-500 transition-fast"
               >
-                <option value="part">原文件名.ext.part1（通用标准）</option>
-                <option value="number">原文件名.ext.001（分卷档案）</option>
-                <option value="infix">原文件名_part1.ext（保留后缀）</option>
+                <option value="part">{t('split.naming.part')}</option>
+                <option value="number">{t('split.naming.number')}</option>
+                <option value="infix">{t('split.naming.infix')}</option>
               </select>
             </div>
 
             {/* 预览 */}
             <div className="border-t border-zinc-800 light:border-zinc-200 pt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 font-mono text-xs">
               <span>
-                预计 <strong className="text-zinc-100 light:text-zinc-900">{plan.totalParts}</strong> 个切片
+                {t('split.preview.parts')} <strong className="text-zinc-100 light:text-zinc-900">{plan.totalParts}</strong> {t('split.preview.chunks')}
               </span>
               <span>
-                单个约 <strong className="text-zinc-100 light:text-zinc-900">{formatBytes(plan.chunkSize)}</strong>
+                {t('split.preview.per')} <strong className="text-zinc-100 light:text-zinc-900">{formatBytes(plan.chunkSize)}</strong>
               </span>
               <span className="text-zinc-500">
-                预计耗时 <strong className="text-zinc-300 light:text-zinc-700">{formatEstimateSeconds(estimateEncryptSeconds(file.size, options.encrypt))}</strong>
-                {options.encrypt && '（含 Argon2 派生 ~1s）'}
+                {t('split.preview.eta')} <strong className="text-zinc-300 light:text-zinc-700">{formatEstimateSeconds(estimateEncryptSeconds(file.size, options.encrypt))}</strong>
+                {options.encrypt && t('split.preview.argon')}
               </span>
               {options.encrypt && (
                 <span className="text-zinc-500">
-                  加密后总大小 ≈ <strong className="text-zinc-300 light:text-zinc-700">{formatBytes(totalOutSizeApprox)}</strong>（含头部 + 标签）
+                  {t('split.preview.encryptedTotal')} <strong className="text-zinc-300 light:text-zinc-700">{formatBytes(totalOutSizeApprox)}</strong>{t('split.preview.header')}
                 </span>
               )}
             </div>
@@ -566,10 +568,10 @@ export function SplitPanel() {
                 disabled={processing}
                 className="w-4 h-4 accent-zinc-100"
               />
-              <span className="text-sm font-semibold">直写磁盘（流式下载，低内存占用）</span>
+              <span className="text-sm font-semibold">{t('split.directToDisk')}</span>
             </label>
             <p className="text-xs font-mono text-zinc-500 pl-7">
-              通过 File System Access API 选择一个文件夹，切片将立即落盘不驻留浏览器内存，适合超大文件。中断后下次打开同一文件可选择「续传」跳过已完成切片。
+              {t('split.directToDisk.hint')}
             </p>
           </div>
 
@@ -582,7 +584,7 @@ export function SplitPanel() {
                 onChange={(e) => setOptions((o) => ({ ...o, encrypt: e.target.checked }))}
                 className="w-4 h-4 accent-zinc-100"
               />
-              <span className="text-sm font-semibold">启用 SealGo 加密（需要密码）</span>
+              <span className="text-sm font-semibold">{t('split.encrypt')}</span>
             </label>
             {options.encrypt && (
               <PasswordPanel
@@ -606,7 +608,7 @@ export function SplitPanel() {
                   : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
               }`}
             >
-              {processing ? '处理中…' : options.encrypt ? '加密并分割' : '立即分割'}
+              {processing ? t('split.execute.processing') : options.encrypt ? t('split.execute.splitEncrypt') : t('split.execute.split')}
             </button>
             {processing && (
               <button
@@ -615,7 +617,7 @@ export function SplitPanel() {
                 }}
                 className="w-full py-2 text-xs font-mono text-zinc-400 hover:text-zinc-200 light:hover:text-zinc-700 border border-zinc-800 light:border-zinc-300 transition-fast pressable"
               >
-                取消任务
+                {t('split.execute.cancel')}
               </button>
             )}
           </div>
@@ -626,26 +628,26 @@ export function SplitPanel() {
               {meter && (
                 <div className="border border-zinc-800 light:border-zinc-200 bg-zinc-900 light:bg-white p-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
                   <div>
-                    <div className="text-zinc-500">吞吐</div>
+                    <div className="text-zinc-500">{t('split.meter.throughput')}</div>
                     <div className="text-zinc-100 light:text-zinc-900 font-bold">{meter.mbps.toFixed(1)} MB/s</div>
                   </div>
                   <div>
-                    <div className="text-zinc-500">ETA</div>
+                    <div className="text-zinc-500">{t('split.meter.eta')}</div>
                     <div className="text-zinc-100 light:text-zinc-900 font-bold">
                       {(() => {
                         const eta = estimateEtaSeconds(meter)
-                        if (eta === null) return '计算中…'
+                        if (eta === null) return t('split.meter.calculating')
                         if (eta < 60) return `${eta.toFixed(0)}s`
                         return `${Math.floor(eta / 60)}m ${Math.floor(eta % 60)}s`
                       })()}
                     </div>
                   </div>
                   <div>
-                    <div className="text-zinc-500">已处理</div>
+                    <div className="text-zinc-500">{t('split.meter.handled')}</div>
                     <div className="text-zinc-100 light:text-zinc-900 font-bold">{meter.handledParts} / {plan.totalParts}</div>
                   </div>
                   <div>
-                    <div className="text-zinc-500">已跳过</div>
+                    <div className="text-zinc-500">{t('split.meter.skipped')}</div>
                     <div className="text-zinc-100 light:text-zinc-900 font-bold">{meter.skippedParts}</div>
                   </div>
                 </div>
@@ -733,10 +735,10 @@ function VirtualizedResultList({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h3 className="text-sm font-mono uppercase tracking-wider flex items-center gap-2">
           <span className="w-2 h-2 bg-emerald-400 pulse-dot" />
-          分割完成（共 {results.length} 个，{formatBytes(totalOutSize)}）
+          {t('split.result.title')}（{t('split.result.total')} {results.length} {t('split.preview.chunks')}，{formatBytes(totalOutSize)}）
           {useVirtual && (
             <span className="text-[10px] text-zinc-500 font-normal">
-              · 虚拟滚动（仅渲染 {virtual.endIndex - virtual.startIndex + 1} 行）
+              · {t('split.virtual')} {virtual.endIndex - virtual.startIndex + 1} {t('split.virtual.lines')}
             </span>
           )}
         </h3>
@@ -746,20 +748,20 @@ function VirtualizedResultList({
             className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
             title="把所有切片打包成单个 ZIP 文件（合并端可直接拖入 ZIP 自动解压）"
           >
-            打包 ZIP
+            {t('split.result.zip')}
           </button>
           <button
             onClick={onDownloadBundle}
             className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
             title="按顺序拼接为单文件下载"
           >
-            打包下载
+            {t('split.result.bundle')}
           </button>
           <button
             onClick={onDownloadAll}
             className="px-4 py-1.5 text-xs font-mono font-bold bg-zinc-100 text-zinc-950 light:bg-zinc-900 light:text-zinc-50 pressable transition-fast"
           >
-            逐个下载全部
+            {t('split.result.all')}
           </button>
         </div>
       </div>
@@ -825,7 +827,7 @@ function ResultRow({
         onClick={onDownload}
         className="ml-2 px-3 py-1 border border-zinc-800 light:border-zinc-300 hover:border-zinc-600 text-zinc-300 light:text-zinc-700 transition-fast pressable shrink-0"
       >
-        下载
+        {t('split.result.download')}
       </button>
     </div>
   )
