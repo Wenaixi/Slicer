@@ -5,7 +5,7 @@
 //       如果实现完全同步(直接 arrayBuffer → unzipSync → return),则 await 让出时不调度 setTimeout
 //       修复后:实现会先 await 一帧再调 unzipSync,主线程让出
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { packAsZip, unzipAll } from '../lib/archive'
 
 describe('unzipAll 主线程让出', () => {

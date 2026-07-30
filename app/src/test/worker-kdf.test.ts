@@ -1,13 +1,12 @@
 // 单元测试：worker-kdf 的请求/响应调度逻辑
 // 重点：1) id 校验,迟到响应被丢弃 2) Map 支持多请求并发 3) 拒绝错误正确传递
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { createKdfDispatcher, type KdfWorkerLike } from '../lib/worker-kdf'
 
 class FakeWorker implements KdfWorkerLike {
   public onmessage: ((ev: { data: unknown }) => void) | null = null
   public sent: { id: number; password: string; salt: Uint8Array }[] = []
-  private nextId = 1
   /** 当 defaults 或 responses 都不匹配时是否自动回 ok:显式 auto 标志 */
   private auto: { result?: Uint8Array; error?: string } | null
   private responses: { matchId?: number; payload: { id: number; result?: Uint8Array; error?: string } }[]

@@ -54,10 +54,10 @@ function loadScript(src: string): Promise<void> {
 async function loadWasmBytes(): Promise<ArrayBuffer> {
   const isNode = typeof process !== 'undefined' && !!(process as { versions?: { node?: string } }).versions?.node;
   if (isNode) {
-    const { readFile } = await import('node:fs/promises');
-    const { resolve } = await import('node:path');
-    const buf = await readFile(resolve(process.cwd(), 'public/wasm/SealGo.wasm'));
-    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+    // @vite-ignore 阻止 Vite/Rolldown 静态分析此动态 import
+    // (Node 测试环境才会进此分支,浏览器构建时 isNode=false,Node 依赖被完全跳过)
+    const mod = await import(/* @vite-ignore */ './sealgo-node')
+    return mod.loadWasmBytesFromDisk()
   }
   const resp = await fetch('/wasm/SealGo.wasm');
   if (!resp.ok) throw new Error(`SealGo.wasm 加载失败: ${resp.status}`);
