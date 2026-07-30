@@ -30,6 +30,57 @@ interface ChunkResult {
   encrypted: boolean
 }
 
+/**
+ * 序列化"会改变切片生成方案"的 options 字段（剥离 password）。
+ * 用作 useEffect 依赖等价键：只有 key 变化时才重新检查 saved progress。
+ */
+function optionsKey(opts: SplitOptions): string {
+  return `${opts.mode}|${opts.sizeValue}|${opts.sizeUnit}|${opts.countValue}|${opts.naming}|${opts.encrypt}`
+}
+
+/**
+ * 合并本轮新生成的 results 与磁盘上已存在的切片（续传场景）。
+ * 续传模式下，results 只含本轮新产生的切片；被跳过的切片只在 dirHandle 里。
+ * 按 name 去重，按 index 升序排，保证 bundle/zip/download 完整且按序。
+ */
+async function collectAllChunks(
+  results: ChunkResult[],
+  dirHandle: FileSystemDirectoryHandle | null,
+  resumeMode: boolean,
+): Promise<ChunkResult[]> {
+  if (!resumeMode || !dirHandle) return results
+  // results 已有切片按 name → result 索引
+  const byName = new Map<string, ChunkResult>()
+  for (const r of results) byName.set(r.name, r)
+  // 从磁盘补齐被跳过的切片
+  try {
+    for await (const [name] of (dirHandle as unknown as {
+      entries: () => AsyncIterable<[string, unknown]>
+    }).entries()) {
+      if (byName.has(name)) continue
+      const handle = await (dirHandle as unknown as {
+        getFileHandle: (n: string, opts?: { create?: boolean }) => Promise<FileSystemFileHandle>
+      }).getFileHandle(name)
+      const file = await (handle as unknown as { getFile: () => Promise<File> }).getFile()
+      if (file.size <= 0) continue
+      // 解析 index 用于排序
+      const idxMatch = name.match(/part(\d+)|.(\d{3,4})(?:\.sc)?$/)
+      const idx = idxMatch ? parseInt(idxMatch[1] || idxMatch[2], 10) : 0
+      byName.set(name, {
+        name,
+        blob: file,
+        size: file.size,
+        index: Number.isFinite(idx) ? idx : 0,
+        encrypted: name.endsWith('.sc'),
+      })
+    }
+  } catch {
+    // 读磁盘失败时降级为只导出本轮切片
+    return results
+  }
+  return [...byName.values()].sort((a, b) => a.index - b.index)
+}
+
 export function SplitPanel() {
   const { tab } = useAppState()
   useLocale() // 订阅语言切换触发重渲染
@@ -47,6 +98,8 @@ export function SplitPanel() {
   const [crossTabEvent, setCrossTabEvent] = useState<CrossTabProgressEvent | null>(null)
   const [meter, setMeter] = useState<ProgressMeter | null>(null)
   const abortRef = useRef(false)
+  // 直写磁盘的目录句柄：executeSplit 选完目录后保留，下载 manifest 时仍可读取
+  const dirHandleRef = useRef<FileSystemDirectoryHandle | null>(null)
 
   // 重置进度与中止标记当文件或选项变化
   useEffect(() => {
@@ -55,13 +108,16 @@ export function SplitPanel() {
 
   useEffect(() => {
     // 从 sessionStorage 拉取上次中断的进度
+    // 依赖完整 options（除 password 外）—— 改命名规范/单位/计数/模式/加密开关都视为新方案，
+    // 旧 progress 不可复用
     const saved = loadProgress()
-    if (saved && saved.fileSize === file?.size && saved.options.sizeValue === options.sizeValue) {
+    if (saved && saved.fileSize === file?.size && optionsKey(saved.options) === optionsKey(options)) {
       setResumableSaved(saved)
     } else {
       setResumableSaved(null)
     }
-  }, [file?.size, options.sizeValue])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file?.size, options.mode, options.sizeValue, options.sizeUnit, options.countValue, options.naming, options.encrypt])
 
   // 订阅其他 Tab 的分割进度（跨标签实时同步）
   useEffect(() => {
@@ -154,6 +210,7 @@ export function SplitPanel() {
       if (typeof picker === 'function') {
         try {
           dirHandle = await picker({ mode: 'readwrite' })
+          dirHandleRef.current = dirHandle
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return
           throw err
@@ -200,27 +257,27 @@ export function SplitPanel() {
     })
 
     const chunks: ChunkResult[] = []
+    // 直写磁盘的写盘 Promise 收集：streamSplit 完成后统一 await allSettled，
+    // 让任意写盘错误都能被外层 catch 捕获（避免 onChunk 改 async 后仍吞错）
+    const writePromises: Promise<void>[] = []
     try {
       const summary = await streamSplit(
         file,
         options,
         {
           shouldAbort: () => abortRef.current,
-          onChunk: (chunk) => {
-            // 直写磁盘：立即落盘，不驻留内存
+          onChunk: async (chunk) => {
+            // 直写磁盘：把写盘 promise 收集起来，循环结束后统一等待
             if (dirHandle) {
-              void (async () => {
-                try {
-                  const handle = await (dirHandle as unknown as {
-                    getFileHandle: (n: string, opts: { create: boolean }) => Promise<FileSystemFileHandle>
-                  }).getFileHandle(chunk.name, { create: true })
-                  const writable = await (handle as unknown as { createWritable: () => Promise<{ write: (b: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void> }> }).createWritable()
-                  await writable.write(chunk.blob)
-                  await writable.close()
-                } catch (err) {
-                  console.error('写磁盘失败:', err)
-                }
+              const p = (async () => {
+                const handle = await (dirHandle as unknown as {
+                  getFileHandle: (n: string, opts: { create: boolean }) => Promise<FileSystemFileHandle>
+                }).getFileHandle(chunk.name, { create: true })
+                const writable = await (handle as unknown as { createWritable: () => Promise<{ write: (b: Blob | ArrayBuffer) => Promise<void>; close: () => Promise<void> }> }).createWritable()
+                await writable.write(chunk.blob)
+                await writable.close()
               })()
+              writePromises.push(p)
             }
             chunks.push({
               name: chunk.name,
@@ -271,6 +328,13 @@ export function SplitPanel() {
         },
         { skipIndices },
       )
+
+      // 等待所有写盘操作完成（直写磁盘模式）：任一失败上抛给外层 catch
+      const writeResults = await Promise.allSettled(writePromises)
+      const writeFailures = writeResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      if (writeFailures.length > 0) {
+        throw writeFailures[0].reason
+      }
 
       if (abortRef.current) {
         // 中断：保留进度供下次续传
@@ -333,20 +397,24 @@ export function SplitPanel() {
   }
 
   // 打包下载：按顺序拼接所有切片 Blob（纯前端零依赖，适合切片数 < 500 场景）
-  const downloadBundle = () => {
+  const downloadBundle = async () => {
     if (results.length === 0) return
-    const bundle = new Blob(results.map((r) => r.blob), { type: 'application/octet-stream' })
+    // 续传模式：从磁盘补齐被跳过的切片，保证 bundle 完整
+    const full = await collectAllChunks(results, dirHandleRef.current, resumeMode)
+    const bundle = new Blob(full.map((r) => r.blob), { type: 'application/octet-stream' })
     downloadBlob(bundle, `${file!.name}.sliced.bundle`)
-    toast(`${t('split.toast.bundleDone')} ${results.length} ${t('split.preview.chunks')}${t('split.toast.bundleHint')}`, 'success')
+    toast(`${t('split.toast.bundleDone')} ${full.length} ${t('split.preview.chunks')}${t('split.toast.bundleHint')}`, 'success')
   }
 
   /** 打包 ZIP 下载：把切片按命名规范塞进单一 ZIP，便于传输与归档 */
   const downloadZip = async () => {
     if (results.length === 0) return
     toast(t('split.toast.zipPacking'), 'info')
+    // 续传模式：从磁盘补齐被跳过的切片，保证 ZIP 完整
+    const full = await collectAllChunks(results, dirHandleRef.current, resumeMode)
     // 逐块读 arrayBuffer 避免 Blob → Uint8Array 类型转换问题
     const entries = await Promise.all(
-      results.map(async (r) => ({
+      full.map(async (r) => ({
         name: r.name,
         data: new Uint8Array(await r.blob.arrayBuffer()),
         size: r.blob.size,
@@ -354,7 +422,7 @@ export function SplitPanel() {
     )
     const zipped = packAsZip(entries)
     downloadBlob(zipped, suggestedZipName(file!.name))
-    toast(`${t('split.toast.zipDone')}（${results.length} ${t('split.preview.chunks')}）`, 'success')
+    toast(`${t('split.toast.zipDone')}（${full.length} ${t('split.preview.chunks')}）`, 'success')
   }
 
   const downloadChunk = (idx: number) => {
@@ -363,11 +431,14 @@ export function SplitPanel() {
     downloadBlob(target.blob, target.name)
   }
 
-  const downloadAll = () => {
-    results.forEach((_, i) => {
-      setTimeout(() => downloadChunk(i), i * 200)
+  const downloadAll = async () => {
+    if (results.length === 0) return
+    // 续传模式：先按 index 排序后逐个下载（磁盘已有的走 dirHandle，未跳过的走 results）
+    const full = await collectAllChunks(results, dirHandleRef.current, resumeMode)
+    full.forEach((r, i) => {
+      setTimeout(() => downloadBlob(r.blob, r.name), i * 200)
     })
-    toast(`${t('split.toast.downloadAll')} ${results.length} ${t('split.preview.chunks')}`, 'info')
+    toast(`${t('split.toast.downloadAll')} ${full.length} ${t('split.preview.chunks')}`, 'info')
   }
 
   const totalOutSize = results.reduce((a, b) => a + b.size, 0)

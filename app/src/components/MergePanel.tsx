@@ -213,6 +213,19 @@ export function MergePanel() {
 
   const executeMerge = async (group: MergeGroup, mode: 'download' | 'saveFile' | 'saveToFolder') => {
     if (group.items.length === 0) return
+
+    // 密码前置校验：避免创建句柄后才发现密码错，浪费一次文件系统弹窗
+    if (group.encrypted) {
+      if (!password) {
+        toast(t('merge.toast.pw'), 'error')
+        return
+      }
+      if (password.length < 8) {
+        toast(t('merge.toast.pwLength'), 'error')
+        return
+      }
+    }
+
     setDecrypting(true)
     setProgress(0)
     setProgressLabel(group.encrypted ? `${t('merge.phase.decrypting')}…` : `${t('merge.phase.merging')}…`)
@@ -238,20 +251,6 @@ export function MergePanel() {
     }
     const useDirectFile = !!fileHandle
 
-    // 密码前置校验
-    if (group.encrypted) {
-      if (!password) {
-        toast(t('merge.toast.pw'), 'error')
-        setDecrypting(false)
-        return
-      }
-      if (password.length < 8) {
-        toast(t('merge.toast.pwLength'), 'error')
-        setDecrypting(false)
-        return
-      }
-    }
-
     const abortRef = { current: false }
 
     try {
@@ -268,24 +267,13 @@ export function MergePanel() {
         },
         {
           shouldAbort: () => abortRef.current,
-          onPlainChunk: ({ index, blob }) => {
+          onPlainChunk: async ({ index, blob }) => {
             // 优先级：folderHandle > fileHandle > 内存累积
+            // onPlainChunk 改为 async 后，写盘错误能直接上抛，由外层 catch 统一兜底
             if (folderHandle) {
-              void (async () => {
-                try {
-                  await folderHandle!.write(blob)
-                } catch (err) {
-                  console.error('写文件夹失败:', err)
-                }
-              })()
+              await folderHandle.write(blob)
             } else if (fileHandle) {
-              void (async () => {
-                try {
-                  await fileHandle!.write(blob)
-                } catch (err) {
-                  console.error('写文件失败:', err)
-                }
-              })()
+              await fileHandle.write(blob)
             } else {
               memoryChunks.push(blob)
               memoryBytes += blob.size
@@ -333,6 +321,16 @@ export function MergePanel() {
       void useStreamingFile
       void useDirectFile
     } catch (err) {
+      // 任何异常（写盘失败、解密错误、streamMerge 抛错）都先确保句柄被 close
+      // 否则文件描述符会泄漏，下一次同名 saveFile 可能锁住
+      if (folderHandle) {
+        try { await folderHandle.close() } catch {}
+        folderHandle = null
+      }
+      if (fileHandle) {
+        try { await fileHandle.close() } catch {}
+        fileHandle = null
+      }
       if (err instanceof DOMException && err.name === 'AbortError') {
         toast(t('merge.toast.cancelled'), 'info')
         return
