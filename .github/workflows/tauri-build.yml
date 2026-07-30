@@ -254,15 +254,26 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          set -e
+          set -euo pipefail
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           echo "BUILD_TOOLS=$BUILD_TOOLS"
           KS="$RUNNER_TEMP/keystore.jks"
           test -f "$KS" || { echo "::error::keystore missing at $KS"; exit 1; }
 
+          # 清洗 secret：去掉 CR/LF/空白/非 ASCII（gh secret 经 Windows 写入时常带 \r）
+          ALIAS=$(printf '%s' "${ANDROID_KEY_ALIAS:-upload}" | tr -cd 'A-Za-z0-9._-')
+          PASS=$(printf '%s' "${ANDROID_KEY_PASSWORD}" | tr -cd 'A-Za-z0-9')
+          echo "alias_len=${#ALIAS} pass_len=${#PASS}"
+          test -n "$PASS" || { echo "::error::empty password after ASCII strip"; exit 1; }
+          # apksigner 要 file: 形式更稳，避免 shell 引号
+          printf '%s' "$PASS" > "$RUNNER_TEMP/ks.pass"
+          printf '%s' "$ALIAS" > "$RUNNER_TEMP/ks.alias"
+          # 本地校验 keystore 能打开
+          keytool -list -keystore "$KS" -storetype PKCS12 -storepass:file "$RUNNER_TEMP/ks.pass" | head -5
+
           mapfile -t apks < <(find src-tauri/gen/android -name '*.apk' -type f | sort)
           echo "APKs before sign:"
-          printf '  %s (%s bytes)\n' $(for f in "${apks[@]}"; do echo "$f"; wc -c < "$f"; done)
+          for f in "${apks[@]}"; do echo "  $f ($(wc -c < "$f") bytes)"; done
 
           signed_any=0
           for f in "${apks[@]}"; do
@@ -272,51 +283,41 @@ jobs:
               *-unsigned.apk)
                 aligned="$dir/${base/-unsigned.apk/-aligned.apk}"
                 out="$dir/${base/-unsigned.apk/.apk}"
-                # 已经是 v1/v2 签过的就跳过
-                if "$BUILD_TOOLS/apksigner" verify --print-certs "$f" >/dev/null 2>&1; then
-                  echo "already signed: $base"
-                  signed_any=1
-                  continue
-                fi
-                "$BUILD_TOOLS/zipalign" -f -p 4 "$f" "$aligned"
-                "$BUILD_TOOLS/apksigner" sign \
-                  --ks "$KS" \
-                  --ks-pass "pass:${ANDROID_KEY_PASSWORD}" \
-                  --ks-key-alias "${ANDROID_KEY_ALIAS}" \
-                  --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
-                  --out "$out" \
-                  "$aligned"
-                "$BUILD_TOOLS/apksigner" verify --verbose "$out"
-                echo "signed -> $out"
-                rm -f "$aligned" "$f"
-                signed_any=1
                 ;;
               *)
-                # 非 unsigned 名字：仍验证一下
-                if "$BUILD_TOOLS/apksigner" verify --print-certs "$f" >/dev/null 2>&1; then
-                  echo "already signed: $base"
-                  signed_any=1
-                else
-                  echo "unsigned nonstandard name, signing in place: $base"
-                  aligned="$f.aligned"
-                  "$BUILD_TOOLS/zipalign" -f -p 4 "$f" "$aligned"
-                  "$BUILD_TOOLS/apksigner" sign \
-                    --ks "$KS" \
-                    --ks-pass "pass:${ANDROID_KEY_PASSWORD}" \
-                    --ks-key-alias "${ANDROID_KEY_ALIAS}" \
-                    --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
-                    --out "$f" \
-                    "$aligned"
-                  rm -f "$aligned"
-                  "$BUILD_TOOLS/apksigner" verify --verbose "$f"
-                  signed_any=1
-                fi
+                aligned="$f.aligned"
+                out="$f"
                 ;;
             esac
+            if "$BUILD_TOOLS/apksigner" verify --print-certs "$f" >/dev/null 2>&1; then
+              echo "already signed: $base"
+              # 统一改名到非 unsigned
+              if [[ "$base" == *unsigned* ]]; then
+                cp -f "$f" "$out"
+              fi
+              signed_any=1
+              continue
+            fi
+            "$BUILD_TOOLS/zipalign" -f -p 4 "$f" "$aligned"
+            "$BUILD_TOOLS/apksigner" sign \
+              --ks "$KS" \
+              --ks-type PKCS12 \
+              --ks-pass "file:$RUNNER_TEMP/ks.pass" \
+              --ks-key-alias "$ALIAS" \
+              --key-pass "file:$RUNNER_TEMP/ks.pass" \
+              --out "$out" \
+              "$aligned"
+            "$BUILD_TOOLS/apksigner" verify --verbose "$out"
+            echo "signed -> $out"
+            rm -f "$aligned"
+            # 删掉 unsigned 原件（若 out 不同）
+            if [ "$f" != "$out" ]; then rm -f "$f"; fi
+            signed_any=1
           done
           test "$signed_any" -eq 1 || { echo "::error::no APK signed"; exit 1; }
           echo "APKs after sign:"
           find src-tauri/gen/android -name '*.apk' -type f -exec ls -la {} \;
+          rm -f "$RUNNER_TEMP/ks.pass"
 
       - name: Upload APK to release
         env:
