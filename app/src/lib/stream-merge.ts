@@ -3,7 +3,7 @@
 // 大文件（10GB+）也不会因为累加 chunks 数组而爆内存。
 // 解密错误用 classifyDecryptError 细分为「密码错误 vs 文件损坏」，调用方可据此兜底。
 
-import { isSealGoFile, decryptChunkWithPassword } from './crypto'
+import { isSealGoFile, decryptChunkWithKey, extractSalt, deriveKeyFromPassword } from './crypto'
 import { classifyDecryptError, kindLabel, type ClassifiedError } from './decrypt-error'
 
 export class StreamMergeError extends Error {
@@ -59,52 +59,99 @@ export async function streamMerge(
   let bytesDone = 0
   const totalOutSize = options.bytesTotal
 
-  for (let i = 0; i < total; i++) {
-    if (shouldAbort()) throw new DOMException('已取消', 'AbortError')
+  // 加密组：派生一次 fileKey 循环复用，避免每片重复 Argon2id
+  // 关键不变量：同组所有切片头部 salt 必须一致（split 端是同 salt 全程写入）
+  // 第一片派生后 cache，后续每片都用 fileKey 解密
+  let cachedFileKey: Uint8Array | null = null
+  let cachedSalt: Uint8Array | null = null
 
-    const item = items[i]
-    let plainBytes: Uint8Array
+  try {
+    for (let i = 0; i < total; i++) {
+      if (shouldAbort()) throw new DOMException('已取消', 'AbortError')
 
-    if (options.encrypted) {
-      const buf = new Uint8Array(await item.file.arrayBuffer())
-      if (!isSealGoFile(buf)) {
-        throw new StreamMergeError(item.originalName, {
-          kind: 'not-sealgo',
-          message: '不是合法的 SealGo 加密文件（缺少 SC01 魔数）',
-          hint: '只有以 .sc 结尾的加密切片才能解密',
-        }, i)
+      const item = items[i]
+      let plainBytes: Uint8Array
+
+      if (options.encrypted) {
+        const buf = new Uint8Array(await item.file.arrayBuffer())
+        if (!isSealGoFile(buf)) {
+          throw new StreamMergeError(item.originalName, {
+            kind: 'not-sealgo',
+            message: '不是合法的 SealGo 加密文件（缺少 SC01 魔数）',
+            hint: '只有以 .sc 结尾的加密切片才能解密',
+          }, i)
+        }
+        if (!options.password) {
+          throw new StreamMergeError(item.originalName, {
+            kind: 'wrong-password',
+            message: '请先输入密码',
+            hint: '解密需要密码',
+          }, i)
+        }
+        try {
+          // 同组切片同 salt：首次派生并缓存，后续每片校验 salt 一致后直接复用
+          const salt = extractSalt(buf)
+          if (cachedFileKey && cachedSalt) {
+            // 常量时间 salt 比较（防旁路攻击）
+            if (!saltEquals(salt, cachedSalt)) {
+              throw new StreamMergeError(item.originalName, {
+                kind: 'header-corrupt',
+                message: '同组切片盐不一致，无法复用 fileKey',
+                hint: '切片可能来自不同的加密批次',
+              }, i)
+            }
+            plainBytes = await decryptChunkWithKey(buf, cachedFileKey)
+          } else {
+            // 首片：派生 fileKey
+            cachedFileKey = await deriveKeyFromPassword(options.password, salt)
+            cachedSalt = salt
+            try {
+              plainBytes = await decryptChunkWithKey(buf, cachedFileKey)
+            } catch (err) {
+              // 首片失败时擦除 fileKey 防止泄漏
+              cachedFileKey.fill(0)
+              cachedFileKey = null
+              cachedSalt = null
+              const classified = classifyDecryptError(buf, err)
+              throw new StreamMergeError(item.originalName, classified, i)
+            }
+          }
+        } catch (err) {
+          // 已经包装为 StreamMergeError 直接上抛
+          if (err instanceof StreamMergeError) throw err
+          const classified = classifyDecryptError(buf, err)
+          throw new StreamMergeError(item.originalName, classified, i)
+        }
+      } else {
+        // 明文：直接读 arrayBuffer（用 Uint8Array 统一接口）
+        plainBytes = new Uint8Array(await item.file.arrayBuffer())
       }
-      if (!options.password) {
-        throw new StreamMergeError(item.originalName, {
-          kind: 'wrong-password',
-          message: '请先输入密码',
-          hint: '解密需要密码',
-        }, i)
-      }
-      try {
-        plainBytes = await decryptChunkWithPassword(buf, options.password)
-      } catch (err) {
-        const classified = classifyDecryptError(buf, err)
-        throw new StreamMergeError(item.originalName, classified, i)
-      }
-    } else {
-      // 明文：直接读 arrayBuffer（用 Uint8Array 统一接口）
-      plainBytes = new Uint8Array(await item.file.arrayBuffer())
+
+      bytesDone += plainBytes.byteLength
+      // 物化为 Blob 时用 .buffer as ArrayBuffer 规避 SharedArrayBuffer 类型推断
+      const blob = new Blob([plainBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' })
+      // onPlainChunk 约定 async：消费方写盘错误直接上抛，由外层 catch 统一兜底
+      await onPlainChunk({ index: i, blob, bytes: plainBytes.byteLength })
+      onProgress({ index: i + 1, total, bytesDone, bytesTotal: totalOutSize })
+      mergedParts++
+
+      // 每块让出主线程（与 stream-split 一致）
+      if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0))
     }
 
-    bytesDone += plainBytes.byteLength
-    // 物化为 Blob 时用 .buffer as ArrayBuffer 规避 SharedArrayBuffer 类型推断
-    const blob = new Blob([plainBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' })
-    // onPlainChunk 约定 async：消费方写盘错误直接上抛，由外层 catch 统一兜底
-    await onPlainChunk({ index: i, blob, bytes: plainBytes.byteLength })
-    onProgress({ index: i + 1, total, bytesDone, bytesTotal: totalOutSize })
-    mergedParts++
-
-    // 每块让出主线程（与 stream-split 一致）
-    if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0))
+    return { totalParts: total, mergedParts, totalOutSize: bytesDone }
+  } finally {
+    // 擦除 fileKey 敏感材料
+    if (cachedFileKey) cachedFileKey.fill(0)
   }
+}
 
-  return { totalParts: total, mergedParts, totalOutSize: bytesDone }
+/** 32 字节常量时间盐比较（防止旁路攻击） */
+function saltEquals(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i]
+  return diff === 0
 }
 
 export { kindLabel }
