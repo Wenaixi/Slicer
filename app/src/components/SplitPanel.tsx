@@ -22,6 +22,7 @@ import { createMeter, recordChunk, estimateEtaSeconds, type ProgressMeter } from
 import { useVirtualWindow } from './hooks/useVirtualWindow'
 import { t } from '../lib/i18n'
 import { useLocale } from './hooks/useLocale'
+import { buildManifest, serializeManifest } from '../lib/manifest'
 
 interface ChunkResult {
   name: string
@@ -426,6 +427,26 @@ export function SplitPanel() {
     toast(`${t('split.toast.zipDone')}（${full.length} ${t('split.preview.chunks')}）`, 'success')
   }
 
+  /** 下载 manifest.json（切片完整性校验用） */
+  const downloadManifest = async () => {
+    if (results.length === 0 || !file) return
+    toast('正在计算 SHA-256…', 'info')
+    const manifest = await buildManifest(
+      { name: file.name, size: file.size },
+      results,
+      {
+        encrypted: options.encrypt,
+        naming: options.naming,
+        chunkSize: plan.chunkSize,
+      },
+    )
+    const json = serializeManifest(manifest)
+    const blob = new Blob([json], { type: 'application/json' })
+    const base = file.name.replace(/\.[^.]+$/, '')
+    downloadBlob(blob, `${base}.manifest.json`)
+    toast(`manifest 已生成（${results.length} 个切片的 SHA-256）`, 'success')
+  }
+
   const downloadChunk = (idx: number) => {
     const target = results[idx]
     if (!target) return
@@ -736,6 +757,7 @@ export function SplitPanel() {
               onDownloadBundle={downloadBundle}
               onDownloadAll={downloadAll}
               onDownloadChunk={downloadChunk}
+              onDownloadManifest={downloadManifest}
             />
           )}
         </>
@@ -787,6 +809,7 @@ function VirtualizedResultList({
   onDownloadBundle,
   onDownloadAll,
   onDownloadChunk,
+  onDownloadManifest,
 }: {
   results: ChunkResult[]
   totalOutSize: number
@@ -794,6 +817,7 @@ function VirtualizedResultList({
   onDownloadBundle: () => void
   onDownloadAll: () => void
   onDownloadChunk: (idx: number) => void
+  onDownloadManifest: () => void
 }) {
   const useVirtual = results.length > 80
   const virtual = useVirtualWindow(results, {
@@ -815,6 +839,13 @@ function VirtualizedResultList({
           )}
         </h3>
         <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={onDownloadManifest}
+            className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
+            title="下载 manifest.json 用于合并端完整性校验（SHA-256）"
+          >
+            {t('manifest.download')}
+          </button>
           <button
             onClick={onDownloadZip}
             className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"

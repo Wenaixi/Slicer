@@ -13,6 +13,8 @@ import { detectArchiveKind, unzipAll, filterChunkEntries } from '../lib/archive'
 import { useVirtualWindow } from './hooks/useVirtualWindow'
 import { t } from '../lib/i18n'
 import { useLocale } from './hooks/useLocale'
+import { pushError } from '../lib/panel-error'
+import { parseManifest, verifyChunksAgainstManifest, type SplitManifest } from '../lib/manifest'
 
 /** webkit 文件夹拖入：把目录里的所有文件递归拉平成 File[]。非 WebKit 静默返回 [f]。 */
 async function flattenIfDirectory(file: File): Promise<File[]> {
@@ -155,6 +157,8 @@ export function MergePanel() {
   const [progress, setProgress] = useState(0)
   const [progressLabel, setProgressLabel] = useState('')
   const [extracting, setExtracting] = useState(false)
+  const [manifest, setManifest] = useState<SplitManifest | null>(null)
+  const [verifyState, setVerifyState] = useState<{ ok: boolean; mismatched: number[]; missing: string[] } | null>(null)
 
   useEffect(() => {
     // 切片合并面板每次进入时清空密码（防误复用到其他文件）
@@ -168,6 +172,13 @@ export function MergePanel() {
   // 全局拖拽：window drop 事件路由到合并 Tab，自动展开 ZIP / 文件夹
   const handleGlobalDrop = useCallback(async (incoming: File[]) => {
     if (incoming.length === 0) return
+    // manifest.json 单独处理，不走 expandIncoming
+    const manifestFile = incoming.find((f) => f.name.endsWith('.manifest.json'))
+    if (manifestFile) {
+      await handleManifestUpload(manifestFile)
+      incoming = incoming.filter((f) => f !== manifestFile)
+      if (incoming.length === 0) return
+    }
     const expanded = await expandIncoming(incoming, setFiles)
     if (expanded > 0) toast(`${t('merge.toast.appended')} ${expanded} ${t('merge.chunks')}`, 'success')
   }, [])
@@ -184,10 +195,55 @@ export function MergePanel() {
     return () => window.removeEventListener('slicer:global-drop', handler)
   }, [tab, handleGlobalDrop])
 
+  // 检测拖入 manifest.json
+  const handleManifestUpload = async (file: File) => {
+    try {
+      const text = await file.text()
+      const m = parseManifest(text)
+      if (!m) {
+        toast(t('manifest.invalid'), 'error')
+        return
+      }
+      setManifest(m)
+      setVerifyState(null)
+      toast(`${t('manifest.loaded')}（${m.totalParts} ${t('manifest.chunkCount')}）`, 'info')
+    } catch (err) {
+      toast(t('manifest.readFail'), 'error')
+      void err
+    }
+  }
+
+  // 用 manifest 校验当前已加载切片
+  const runVerify = async () => {
+    if (!manifest) {
+      toast(t('manifest.needUpload'), 'error')
+      return
+    }
+    const chunkFiles: { name: string; data: Uint8Array }[] = []
+    for (const f of files) {
+      const buf = new Uint8Array(await f.arrayBuffer())
+      chunkFiles.push({ name: f.name, data: buf })
+    }
+    const result = await verifyChunksAgainstManifest(manifest, chunkFiles)
+    setVerifyState(result)
+    if (result.ok) {
+      toast(t('manifest.verified'), 'success')
+    } else {
+      toast(`${t('manifest.mismatch')} ${result.mismatched.length} · ${t('manifest.missing')} ${result.missing.length}`, 'error')
+    }
+  }
+
   if (tab !== 'merge') return null
 
   const addFiles = async (incoming: File[]) => {
     if (incoming.length === 0) return
+    // manifest.json 单独处理
+    const manifestFile = incoming.find((f) => f.name.endsWith('.manifest.json'))
+    if (manifestFile) {
+      await handleManifestUpload(manifestFile)
+      incoming = incoming.filter((f) => f !== manifestFile)
+      if (incoming.length === 0) return
+    }
     const added = await expandIncoming(incoming, setFiles)
     if (added === 0) toast(t('merge.toast.dup'), 'info')
     else toast(`${t('merge.toast.appended')} ${added} ${t('merge.chunks')}`, 'success')
@@ -345,10 +401,29 @@ export function MergePanel() {
         if (classified.hint) {
           toast(classified.hint, 'info', 6000)
         }
+        // 同步推送到 ErrorStack 常驻卡片，便于复制诊断
+        pushError({
+          kind: 'decrypt',
+          title: `${label}: ${originalName}`,
+          message: classified.message,
+          hint: classified.hint,
+          fileName: originalName,
+          diagnostics: [
+            `kind: ${classified.kind}`,
+            `password length: ${password.length}`,
+            `file size: ${err instanceof Error ? (err as StreamMergeError).itemIndex : 'n/a'}`,
+          ].join('\n'),
+        })
         return
       }
       const msg = err instanceof Error ? err.message : t('merge.toast.fail')
       toast(msg, 'error')
+      pushError({
+        kind: 'merge',
+        title: t('merge.toast.fail'),
+        message: msg,
+        diagnostics: err instanceof Error && err.stack ? err.stack : String(err),
+      })
     } finally {
       setDecrypting(false)
     }
@@ -389,6 +464,34 @@ export function MergePanel() {
               {t('merge.clear')}
             </button>
           </div>
+
+          {/* manifest 完整性校验条 */}
+          {manifest && (
+            <div className="border border-blue-500/30 bg-blue-500/5 light:bg-blue-50 p-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono">
+              <div className="text-blue-400 light:text-blue-700">
+                manifest · {manifest.originalName} · {manifest.totalParts} {t('merge.chunks')} · {formatBytes(manifest.originalSize)}
+                {verifyState && (
+                  <span className={verifyState.ok ? 'text-emerald-400 ml-2' : 'text-red-400 ml-2'}>
+                    {verifyState.ok ? `· ${t('manifest.verified')}` : `· ${t('manifest.mismatch')} ${verifyState.mismatched.length} · ${t('manifest.missing')} ${verifyState.missing.length}`}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={runVerify}
+                  className="px-3 py-1.5 bg-blue-500/20 text-blue-300 light:text-blue-800 border border-blue-500/40 hover:bg-blue-500/30 transition-fast pressable"
+                >
+                  {t('manifest.upload')}
+                </button>
+                <button
+                  onClick={() => { setManifest(null); setVerifyState(null) }}
+                  className="px-3 py-1.5 text-zinc-400 light:text-zinc-600 border border-zinc-800 light:border-zinc-300 hover:border-zinc-600 transition-fast pressable"
+                >
+                  {t('error.dismiss')}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* 密码框：仅当存在加密组时显示 */}
           {encryptedGroup && (

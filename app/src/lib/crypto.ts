@@ -25,8 +25,25 @@ export function isSealGoFile(data: Uint8Array): boolean {
   );
 }
 
-/** 从密码派生 32 字节 fileKey（Argon2id, 64MB/3轮/4线程，参数与 SealGo 官方一致） */
+/** 从密码派生 32 字节 fileKey（Argon2id, 64MB/3轮/4线程，参数与 SealGo 官方一致）
+ *  优先在 Worker 中执行（避免阻塞主线程），失败/不支持时降级到主线程。
+ */
 export async function deriveKeyFromPassword(password: string, salt: Uint8Array): Promise<Uint8Array> {
+  // 尝试 Worker 路径
+  try {
+    const { createKdfDispatcher } = await import('./worker-kdf');
+    const dispatcher = createKdfDispatcher(() => {
+      const w = new Worker(new URL('./worker-kdf.ts', import.meta.url), { type: 'module' });
+      return w as unknown as {
+        onmessage: ((ev: { data: unknown }) => void) | null;
+        postMessage(msg: unknown): void;
+      };
+    });
+    return await dispatcher.derive(password, salt);
+  } catch (err) {
+    // Worker 失败：降级到主线程
+    console.warn('Worker KDF 失败，降级到主线程:', err);
+  }
   const a = await getApi();
   return a.derivePasswordKey(password, salt);
 }

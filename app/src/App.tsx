@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { initSealGo } from './lib/sealgo'
 import { ToastStack } from './components/ToastStack'
+import { ErrorStack } from './components/ErrorStack'
 import { Header } from './components/Header'
 import { TabBar } from './components/TabBar'
 import { SplitPanel } from './components/SplitPanel'
@@ -11,6 +12,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { useAppState } from './components/hooks/useAppState'
 import { setTab, setGlobalDragging } from './lib/store'
 import { toast } from './lib/toast'
+import { pushError } from './lib/panel-error'
 
 export default function App() {
   const { theme, tab } = useAppState()
@@ -25,6 +27,13 @@ export default function App() {
     initSealGo().catch((err) => {
       console.error('SealGo WASM 初始化失败:', err)
       toast('SealGo 加密引擎加载失败，加密功能不可用', 'error')
+      pushError({
+        kind: 'wasm',
+        title: 'SealGo WASM 加载失败',
+        message: err instanceof Error ? err.message : String(err),
+        hint: '请确认 public/wasm/SealGo.wasm 与 wasm_exec.js 存在；刷新页面重试。',
+        diagnostics: err instanceof Error && err.stack ? err.stack : String(err),
+      })
     })
   }, [])
 
@@ -98,6 +107,7 @@ export default function App() {
         </main>
         <GlobalDropOverlay currentTab={tab} />
         <ToastStack />
+        <ErrorStack />
       </div>
     </ErrorBoundary>
   )
