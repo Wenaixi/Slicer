@@ -128,8 +128,13 @@ export async function streamMerge(
       }
 
       bytesDone += plainBytes.byteLength
-      // 物化为 Blob 时用 .buffer as ArrayBuffer 规避 SharedArrayBuffer 类型推断
-      const blob = new Blob([plainBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' })
+      // 物化为 Blob 时用 .slice() copy 一份独立缓冲：避免 Blob 持有 plainBytes.buffer
+      // 引用导致下次循环迭代时旧 buffer 仍存活、内存峰值 2x。
+      // 同时 .buffer as ArrayBuffer 规避 SharedArrayBuffer 类型推断
+      const bufCopy = plainBytes.slice().buffer as ArrayBuffer
+      const blob = new Blob([bufCopy], { type: 'application/octet-stream' })
+      // 显式置空 + 让出引用，帮助 GC
+      ;(plainBytes as unknown as { __cleared?: true }).__cleared = true
       // onPlainChunk 约定 async：消费方写盘错误直接上抛，由外层 catch 统一兜底
       await onPlainChunk({ index: i, blob, bytes: plainBytes.byteLength })
       onProgress({ index: i + 1, total, bytesDone, bytesTotal: totalOutSize })
