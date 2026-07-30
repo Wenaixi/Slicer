@@ -170,7 +170,7 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 | v16 | ✅ 完成 | i18n 双语 store（zh 默认，localStorage 记忆）+ 字体三级分级 |
 | v17 | ✅ 完成 | Split/Merge 全量 i18n：字典 130+ key |
 | v18 | ✅ 完成 | Worker KDF 后台派生 + manifest SHA-256 完整性校验 + 面板内错误兜底（ErrorStack + panel-error store + ErrorBoundary）+ 跨 worktree review-tdd 收尾 22 项修复 |
-| v19+ | 🔄 进行中 | Tauri v2 三端 WebView 打包（Windows/Linux/Android），单 src-tauri 壳 + 三份 conf（Android 脚手架已确认由 CI 完成，本机无 Android SDK，详见 §6.5） |
+| v19+ | 🔄 进行中 | Tauri v2 三端 WebView 打包（Windows/Linux/Android），单 src-tauri 壳 + 三份 conf（Android 脚手架已确认由 CI 完成，本机无 Android SDK，详见 §6.5）；Task 10 已就位 —— `.github/workflows/tauri-build.yml` 三 job 并行（commit `4630f0c`） |
 
 ## 6. 已修复的坑（防止回归）
 
@@ -282,3 +282,8 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 - **CSP 红线**：`script-src 'self' 'wasm-unsafe-eval'`（Go wasm 必须）；`connect-src 'self' ipc: http://ipc.localhost`。
 - **设计文档**：`docs/superpowers/specs/2026-07-30-tauri-multiplatform-design.md`
 - **实施计划**：`docs/superpowers/plans/2026-07-30-tauri-multiplatform-plan.md`
+- **CI 流水线**（Task 10，commit `4630f0c`）：`.github/workflows/tauri-build.yml` 触发 `v*` tag push + `workflow_dispatch`，三个 job 并行互不阻塞：
+  - **build-windows**（`windows-latest`）→ `tauri-action@v0` 出 `.msi + .exe`，自动创建 GitHub Release draft（`releaseDraft: true`、`prerelease: false`）
+  - **build-linux**（`ubuntu-22.04`）→ 装 `libwebkit2gtk-4.1-dev/libssl-dev/libgtk-3-dev/libayatana-appindicator3-dev/librsvg2-dev`，`args: --config src-tauri/tauri.linux.conf.json` 强制覆盖 Linux 产物
+  - **build-android**（`ubuntu-latest`）→ Rust target 四档（aarch64/armv7/i686/x86_64-linux-android）+ Temurin JDK17 + `android-actions/setup-android@v3`（platforms;android-34 / build-tools;34.0.0 / ndk;26.1.10909125）+ `cargo tauri android init` + sed 替换 `app_name=Slicer` 与包名 `com.slicer.app` + `cargo tauri android build -- --apk --debug` → `actions/upload-artifact@v4` 上传 APK（debug 签名，keystore 留待后续用 GitHub Secrets）
+  - **未做**：CI secrets（Android release keystore 等后续任务）；Release notes 进阶模板；缓存 Cargo registry（首版保守，跑通再上 `Swatinem/rust-cache`）
