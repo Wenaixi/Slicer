@@ -25,6 +25,16 @@ declare global {
 }
 let readyPromise: Promise<SealGoWasmApi> | null = null;
 
+/** 仅供测试使用:获取内部 readyPromise 状态(null 表示未初始化或已重置)。 */
+export function __getReadyPromiseForTest(): Promise<SealGoWasmApi> | null {
+  return readyPromise;
+}
+
+/** 仅供测试使用:清空缓存的 readyPromise,验证失败重试语义。 */
+export function __resetSealGoForTest(): void {
+  readyPromise = null;
+}
+
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`);
@@ -44,20 +54,21 @@ function loadScript(src: string): Promise<void> {
 async function loadWasmBytes(): Promise<ArrayBuffer> {
   const isNode = typeof process !== 'undefined' && !!(process as { versions?: { node?: string } }).versions?.node;
   if (isNode) {
-    const { readFile } = await import('node:fs/promises');
-    const { resolve } = await import('node:path');
-    const buf = await readFile(resolve(process.cwd(), 'public/wasm/SealGo.wasm'));
-    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+    // @vite-ignore 阻止 Vite/Rolldown 静态分析此动态 import
+    // (Node 测试环境才会进此分支,浏览器构建时 isNode=false,Node 依赖被完全跳过)
+    const mod = await import(/* @vite-ignore */ './sealgo-node')
+    return mod.loadWasmBytesFromDisk()
   }
   const resp = await fetch('/wasm/SealGo.wasm');
   if (!resp.ok) throw new Error(`SealGo.wasm 加载失败: ${resp.status}`);
   return resp.arrayBuffer();
 }
 
-/** 初始化 SealGo WASM（幂等）。返回可直接调用的 API 对象。 */
+/** 初始化 SealGo WASM(幂等)。返回可直接调用的 API 对象。
+ *  失败时把 readyPromise 重置为 null,允许下次调用重新尝试。 */
 export function initSealGo(): Promise<SealGoWasmApi> {
   if (readyPromise) return readyPromise;
-  readyPromise = (async () => {
+  const attempt = (async () => {
     // wasm_exec.js 将 Go 暴露在 globalThis 上（IIFE 绑定 globalThis.Go）
     const GoCtor = (globalThis as { Go?: typeof window.Go }).Go ?? (typeof window !== 'undefined' ? window.Go : undefined);
     if (typeof GoCtor === 'undefined') {
@@ -83,5 +94,10 @@ export function initSealGo(): Promise<SealGoWasmApi> {
     }
     return finalApi;
   })();
-  return readyPromise;
+  // 失败时清空缓存,让下一次 initSealGo() 重新走加载流程(不永久卡死)
+  attempt.catch(() => {
+    if (readyPromise === attempt) readyPromise = null;
+  });
+  readyPromise = attempt;
+  return attempt;
 }

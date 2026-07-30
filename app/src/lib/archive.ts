@@ -37,6 +37,8 @@ export interface ZipEntry {
 
 /** 解压 ZIP 并返回所有条目。路径扁平化（去掉顶层目录）。 */
 export async function unzipAll(blob: Blob): Promise<ZipEntry[]> {
+  // 让出主线程再开始解压,避免大包同步阻塞 UI(ponytail: 解压仍是同步,只是入口先让出一次)
+  await new Promise((r) => setTimeout(r, 0))
   const buf = new Uint8Array(await blob.arrayBuffer())
   const kind = detectArchiveKind(buf)
   if (kind === '7z') {
