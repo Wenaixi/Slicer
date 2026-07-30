@@ -430,10 +430,12 @@ export function SplitPanel() {
   /** 下载 manifest.json（切片完整性校验用） */
   const downloadManifest = async () => {
     if (results.length === 0 || !file) return
-    toast('正在计算 SHA-256…', 'info')
+    toast(t('split.manifest.generating'), 'info')
+    // 续传模式：从磁盘补齐被跳过的切片，保证 manifest 完整
+    const full = await collectAllChunks(results, dirHandleRef.current, resumeMode)
     const manifest = await buildManifest(
       { name: file.name, size: file.size },
-      results,
+      full,
       {
         encrypted: options.encrypt,
         naming: options.naming,
@@ -444,7 +446,7 @@ export function SplitPanel() {
     const blob = new Blob([json], { type: 'application/json' })
     const base = file.name.replace(/\.[^.]+$/, '')
     downloadBlob(blob, `${base}.manifest.json`)
-    toast(`manifest 已生成（${results.length} 个切片的 SHA-256）`, 'success')
+    toast(t('split.manifest.generated', { count: full.length }), 'success')
   }
 
   const downloadChunk = (idx: number) => {

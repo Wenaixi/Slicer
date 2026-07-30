@@ -121,7 +121,7 @@ const dict: Record<string, { zh: string; en: string }> = {
   'split.result.encrypted': { zh: '加密', en: 'Encrypted' },
   'split.result.fail': { zh: '分割失败', en: 'Split failed' },
   'split.manifest.generating': { zh: '正在计算 SHA-256…', en: 'Computing SHA-256…' },
-  'split.manifest.generated': { zh: 'manifest 已生成', en: 'manifest generated' },
+  'split.manifest.generated': { zh: 'manifest 已生成（{count} 个切片的 SHA-256）', en: 'Manifest generated (SHA-256 for {count} chunks)' },
   'split.meter.throughput': { zh: '吞吐', en: 'Throughput' },
   'split.meter.eta': { zh: 'ETA', en: 'ETA' },
   'split.meter.handled': { zh: '已处理', en: 'Processed' },
