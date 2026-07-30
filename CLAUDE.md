@@ -170,7 +170,8 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
 | v16 | ✅ 完成 | i18n 双语 store（zh 默认，localStorage 记忆）+ 字体三级分级 |
 | v17 | ✅ 完成 | Split/Merge 全量 i18n：字典 130+ key |
 | v18 | ✅ 完成 | Worker KDF 后台派生 + manifest SHA-256 完整性校验 + 面板内错误兜底（ErrorStack + panel-error store + ErrorBoundary）+ 跨 worktree review-tdd 收尾 22 项修复 |
-| v19+ | 🔄 进行中 | Tauri v2 三端 WebView 打包（Windows/Linux/Android），单 src-tauri 壳 + 三份 conf（Android 脚手架已确认由 CI 完成，本机无 Android SDK，详见 §6.5）；Task 10 已就位 —— `.github/workflows/tauri-build.yml` 三 job 并行（commit `4630f0c`） |
+| v19 | ✅ 完成 | Tauri v2 三端 WebView 打包（Windows .msi/.exe、Linux .deb/.AppImage、Android .apk 由 CI 出） |
+| v20+ | ⏳ 待做 | Android release keystore + 真机冒烟、icon 品牌化、Mac/iOS（如需）、Updater |
 
 ## 6. 已修复的坑（防止回归）
 
