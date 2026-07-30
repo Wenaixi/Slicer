@@ -201,7 +201,9 @@ WASM 源位于 `D:\newC\stick2\SealGo-src\wasm\main.go`（基于官方 v0.1.0 �
   4. 上传用 `find ... -print0 | xargs -0 gh release upload "${{ github.ref_name }}" --clobber`（glob 在 shell 不展开；tagName 不要再加 `v` 前缀）
   5. universal debug 四 ABI ≈ 433MB；**release + arm64 only + split-per-abi ≈ 12 MB**（实测 `app-arm64-release-unsigned.apk` 12.2MB）
   6. **Maven Central 429**：GHA 出口 IP 常被限流。**禁止**用 init.gradle 只塞 GCS 覆盖 pluginManagement（会冲掉 gradlePluginPortal → kotlin-dsl 插件找不到）。正确：`settings.gradle` 前置完整 `pluginManagement { google(); mavenCentral(); gradlePluginPortal(); maven{GCS} }` + `dependencyResolutionManagement`；构建 45/120/300s 退避重试
-  7. **成功标志（v0.19.0）**：四 job 全绿；Release 资产 = MSI / NSIS EXE / deb / AppImage / HTML zip / `app-arm64-release-unsigned.apk`
+  7. **成功标志（v0.19.0）**：四 job 全绿；Release 资产 = MSI / NSIS EXE / deb / AppImage / HTML zip / **已签名** `Slicer_<ver>_arm64.apk`
+  8. **APK 必须签名**：`*-unsigned.apk` 真机无法安装。CI 用 PKCS12 keystore + `apksigner`（secrets: `ANDROID_KEY_BASE64`/`ALIAS`/`PASSWORD`）。Windows 写 secret 用 `gh secret set --body`，禁止管道（会夹 `\r` → Password is not ASCII）
+  9. **产物命名**：一律 `Slicer_<version>_*`（如 `Slicer_0.19.0_arm64.apk` / `Slicer_0.19.0_html-portable.zip`；Win/Linux 由 tauri-action 自带版本号）
 
 ## 6. 测试基线
 
