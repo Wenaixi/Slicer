@@ -114,35 +114,52 @@ jobs:
 
       # 签名：android init 每次重建 gen/，所以 keystore + gradle 补丁都在 init 之后做。
       # Secrets: ANDROID_KEY_BASE64 / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+      # 备选：若 Gradle 签名配置失败，构建后用 apksigner 兜底签。
       - name: Setup Android signing
         env:
           ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -e
           if [ -z "$ANDROID_KEY_BASE64" ]; then
             echo "::error::ANDROID_KEY_BASE64 secret missing"
             exit 1
           fi
-          echo "$ANDROID_KEY_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
-          # keystore.properties 给 Gradle signingConfigs 用（Tauri 官方路径）
+          # 写 base64 到文件再 decode，避免 echo 管道/换行问题
+          printf '%s' "$ANDROID_KEY_BASE64" | tr -d '\r\n ' > "$RUNNER_TEMP/key.b64"
+          base64 -d "$RUNNER_TEMP/key.b64" > "$RUNNER_TEMP/keystore.jks"
+          # 校验 jks 魔数（JKS 以 0xFEEDFEED 开头，PKCS12 以 0x30）
+          sz=$(wc -c < "$RUNNER_TEMP/keystore.jks")
+          echo "keystore size=$sz"
+          test "$sz" -gt 100 || { echo "::error::keystore too small"; exit 1; }
+
+          # keystore.properties —— 注意 heredoc 不要缩进，Properties 解析会带空格
           cat > src-tauri/gen/android/keystore.properties <<EOF
           keyAlias=${ANDROID_KEY_ALIAS}
           password=${ANDROID_KEY_PASSWORD}
-          storeFile=$RUNNER_TEMP/keystore.jks
+          storeFile=${RUNNER_TEMP}/keystore.jks
           EOF
-          # 补丁 app/build.gradle.kts：加 release signingConfig
+          # 上面 EOF 内容若被 YAML 缩进污染，用 sed 去前导空格
+          sed -i 's/^[[:space:]]*//' src-tauri/gen/android/keystore.properties
+          echo "=== keystore.properties (keys only) ==="
+          cut -d= -f1 src-tauri/gen/android/keystore.properties
+
           APP_GRADLE="src-tauri/gen/android/app/build.gradle.kts"
-          if [ -f "$APP_GRADLE" ]; then
-            # 顶部 import（若无）
-            grep -q 'java.io.FileInputStream' "$APP_GRADLE" || sed -i '1i import java.io.FileInputStream\nimport java.util.Properties' "$APP_GRADLE"
-            # 在 buildTypes 前插入 signingConfigs（若无）
-            if ! grep -q 'signingConfigs' "$APP_GRADLE"; then
-              python3 - <<'PY'
+          test -f "$APP_GRADLE" || { echo "::error::missing $APP_GRADLE"; exit 1; }
+
+          # 顶部 import
+          grep -q 'java.io.FileInputStream' "$APP_GRADLE" \
+            || sed -i '1i import java.io.FileInputStream\nimport java.util.Properties' "$APP_GRADLE"
+
+          # 用独立 python 文件避免 YAML/heredoc 缩进把代码搞坏
+          cat > "$RUNNER_TEMP/patch_signing.py" <<'PY'
           from pathlib import Path
+          import re
           p = Path("src-tauri/gen/android/app/build.gradle.kts")
           t = p.read_text()
-          block = '''
+          if "signingConfigs" not in t:
+              block = '''
               signingConfigs {
                   create("release") {
                       val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -157,24 +174,38 @@ jobs:
                   }
               }
           '''
-          # 插到 android { 内、buildTypes 之前
-          needle = "buildTypes {"
-          if needle in t and "signingConfigs" not in t:
+              needle = "buildTypes {"
+              if needle not in t:
+                  raise SystemExit("buildTypes { not found in build.gradle.kts")
               t = t.replace(needle, block + "\n    " + needle, 1)
-          # release buildType 挂上 signingConfig
-          import re
-          t2 = re.sub(
-              r'(getByName\("release"\)\s*\{)',
-              r'\1\n            signingConfig = signingConfigs.getByName("release")',
-              t,
-              count=1,
-          )
-          p.write_text(t2)
-          print("patched build.gradle.kts")
-          print(p.read_text()[:2000])
+          if 'signingConfig = signingConfigs.getByName("release")' not in t:
+              t2, n = re.subn(
+                  r'(getByName\("release"\)\s*\{)',
+                  r'\1\n            signingConfig = signingConfigs.getByName("release")',
+                  t,
+                  count=1,
+              )
+              if n == 0:
+                  raise SystemExit('getByName("release") not found')
+              t = t2
+          p.write_text(t)
+          print("patched OK")
+          # 打印 signing 相关片段
+          for i, line in enumerate(t.splitlines(), 1):
+              if "signing" in line.lower() or "keystore" in line.lower() or "release" in line:
+                  print(f"{i:4d}: {line}")
           PY
-            fi
-          fi
+          # 去掉 python 文件前导缩进（YAML 写入时带了）
+          python3 -c "
+          from pathlib import Path
+          p = Path('$RUNNER_TEMP/patch_signing.py')
+          lines = p.read_text().splitlines()
+          # 找最小非空缩进
+          indents = [len(l) - len(l.lstrip(' ')) for l in lines if l.strip()]
+          m = min(indents) if indents else 0
+          p.write_text('\n'.join(l[m:] if len(l) >= m else l for l in lines) + '\n')
+          "
+          python3 "$RUNNER_TEMP/patch_signing.py"
           ls -la "$RUNNER_TEMP/keystore.jks" src-tauri/gen/android/keystore.properties
 
       # 根因：Maven Central 对 GHA 出口 429；但 kotlin-dsl 插件只在
@@ -280,44 +311,106 @@ jobs:
           done
           exit 1
 
+      - name: Sign APK with apksigner (fallback + verify)
+        env:
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "BUILD_TOOLS=$BUILD_TOOLS"
+          KS="$RUNNER_TEMP/keystore.jks"
+          test -f "$KS" || { echo "::error::keystore missing at $KS"; exit 1; }
+
+          mapfile -t apks < <(find src-tauri/gen/android -name '*.apk' -type f | sort)
+          echo "APKs before sign:"
+          printf '  %s (%s bytes)\n' $(for f in "${apks[@]}"; do echo "$f"; wc -c < "$f"; done)
+
+          signed_any=0
+          for f in "${apks[@]}"; do
+            base=$(basename "$f")
+            dir=$(dirname "$f")
+            case "$base" in
+              *-unsigned.apk)
+                aligned="$dir/${base/-unsigned.apk/-aligned.apk}"
+                out="$dir/${base/-unsigned.apk/.apk}"
+                # 已经是 v1/v2 签过的就跳过
+                if "$BUILD_TOOLS/apksigner" verify --print-certs "$f" >/dev/null 2>&1; then
+                  echo "already signed: $base"
+                  signed_any=1
+                  continue
+                fi
+                "$BUILD_TOOLS/zipalign" -f -p 4 "$f" "$aligned"
+                "$BUILD_TOOLS/apksigner" sign \
+                  --ks "$KS" \
+                  --ks-pass "pass:${ANDROID_KEY_PASSWORD}" \
+                  --ks-key-alias "${ANDROID_KEY_ALIAS}" \
+                  --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
+                  --out "$out" \
+                  "$aligned"
+                "$BUILD_TOOLS/apksigner" verify --verbose "$out"
+                echo "signed -> $out"
+                rm -f "$aligned" "$f"
+                signed_any=1
+                ;;
+              *)
+                # 非 unsigned 名字：仍验证一下
+                if "$BUILD_TOOLS/apksigner" verify --print-certs "$f" >/dev/null 2>&1; then
+                  echo "already signed: $base"
+                  signed_any=1
+                else
+                  echo "unsigned nonstandard name, signing in place: $base"
+                  aligned="$f.aligned"
+                  "$BUILD_TOOLS/zipalign" -f -p 4 "$f" "$aligned"
+                  "$BUILD_TOOLS/apksigner" sign \
+                    --ks "$KS" \
+                    --ks-pass "pass:${ANDROID_KEY_PASSWORD}" \
+                    --ks-key-alias "${ANDROID_KEY_ALIAS}" \
+                    --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
+                    --out "$f" \
+                    "$aligned"
+                  rm -f "$aligned"
+                  "$BUILD_TOOLS/apksigner" verify --verbose "$f"
+                  signed_any=1
+                fi
+                ;;
+            esac
+          done
+          test "$signed_any" -eq 1 || { echo "::error::no APK signed"; exit 1; }
+          echo "APKs after sign:"
+          find src-tauri/gen/android -name '*.apk' -type f -exec ls -la {} \;
+
       - name: Upload APK to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 优先上传已签名 APK，并删掉 unsigned 与历史 debug 大包
+          set -e
+          tag="${{ github.ref_name }}"
+          ver="${tag#v}"
+          # 确保 Release 存在（tauri-action 通常已建；若 tag 重推被删则重建）
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "Slicer $tag" --notes "See assets to download this version."
+
           mapfile -t apks < <(find src-tauri/gen/android -name '*.apk' -type f | sort)
           echo "found APKs:"
           printf '  %s\n' "${apks[@]}"
-          # 重命名成友好文件名再上传
           for f in "${apks[@]}"; do
             base=$(basename "$f")
-            # 跳过明显的 intermediate
             case "$base" in
-              *unsigned*)
-                # 若同目录有已签名版本则跳过 unsigned
-                signed_candidate="${f/-unsigned/}"
-                if [ -f "$signed_candidate" ]; then
-                  echo "skip unsigned (signed exists): $base"
-                  continue
-                fi
-                # 没签上就也上传，但标名提醒
-                out="Slicer_0.19.0_arm64-unsigned.apk"
-                ;;
-              *)
-                out="Slicer_0.19.0_arm64.apk"
-                ;;
+              *unsigned*) out="Slicer_${ver}_arm64-unsigned.apk" ;;
+              *)          out="Slicer_${ver}_arm64.apk" ;;
             esac
-            # 用实际 tag 版本号
-            ver="${{ github.ref_name }}"
-            ver="${ver#v}"
-            out="Slicer_${ver}_arm64.apk"
-            case "$base" in *unsigned*) out="Slicer_${ver}_arm64-unsigned.apk";; esac
             cp -f "$f" "/tmp/$out"
-            gh release upload "${{ github.ref_name }}" "/tmp/$out" --clobber
+            gh release upload "$tag" "/tmp/$out" --clobber
+            echo "uploaded $out"
           done
-          # 清掉旧资产
-          for stale in app-universal-debug.apk app-arm64-release-unsigned.apk; do
-            gh release delete-asset "${{ github.ref_name }}" "$stale" --yes 2>/dev/null || true
+          # 清掉历史旧名
+          for stale in \
+            app-universal-debug.apk \
+            app-arm64-release-unsigned.apk \
+            app-arm64-release.apk \
+            slicer-html-portable.zip
+          do
+            gh release delete-asset "$tag" "$stale" --yes 2>/dev/null || true
           done
 
   build-html-zip:
