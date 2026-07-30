@@ -411,7 +411,7 @@ export function MergePanel() {
           diagnostics: [
             `kind: ${classified.kind}`,
             `password length: ${password.length}`,
-            `file size: ${err instanceof Error ? (err as StreamMergeError).itemIndex : 'n/a'}`,
+            `chunk index: ${err instanceof Error ? (err as StreamMergeError).itemIndex : 'n/a'}`,
           ].join('\n'),
         })
         return
