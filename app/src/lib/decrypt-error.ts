@@ -21,16 +21,7 @@ export function classifyDecryptError(
 ): ClassifiedError {
   const msg = err instanceof Error ? err.message : String(err)
 
-  // 长度不足 100B 头
-  if (cipher.length < 100) {
-    return {
-      kind: 'not-sealgo',
-      message: '文件太小，不是合法的 SealGo 加密文件',
-      hint: '请确认选择的是 .sc 加密切片',
-    }
-  }
-
-  // 魔数错误
+  // 魔数错误（先判：根本不是 SealGo 文件，无论长度）
   if (
     cipher[0] !== 0x53 || // S
     cipher[1] !== 0x43 || // C
@@ -41,6 +32,15 @@ export function classifyDecryptError(
       kind: 'not-sealgo',
       message: '文件不是 SealGo 加密格式（缺少 SC01 魔数）',
       hint: '只有以 .sc 结尾的加密切片才能解密',
+    }
+  }
+
+  // 魔数正确但长度不足 100B → 头部结构残缺
+  if (cipher.length < 100) {
+    return {
+      kind: 'header-corrupt',
+      message: 'SealGo 文件头不完整（不足 100 字节）',
+      hint: '文件可能被截断，请重新获取该切片',
     }
   }
 

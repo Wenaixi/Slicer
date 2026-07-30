@@ -20,9 +20,15 @@ describe('classifyDecryptError', () => {
     expect(r.kind).toBe('not-sealgo')
   })
 
-  it('长度不足 100B → not-sealgo', () => {
+  it('长度不足 100B 但魔数正确 → header-corrupt', () => {
     const cipher = new Uint8Array(50)
     cipher[0] = 0x53; cipher[1] = 0x43; cipher[2] = 0x30; cipher[3] = 0x31
+    const r = classifyDecryptError(cipher, new Error('any'))
+    expect(r.kind).toBe('header-corrupt')
+  })
+
+  it('魔数错误且长度不足 → not-sealgo', () => {
+    const cipher = new Uint8Array(10)
     const r = classifyDecryptError(cipher, new Error('any'))
     expect(r.kind).toBe('not-sealgo')
   })
