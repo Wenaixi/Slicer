@@ -113,55 +113,97 @@ jobs:
           sed -i 's|"com\.tauri\.dev"|"com.slicer.app"|g' src-tauri/gen/android/app/src/main/AndroidManifest.xml
         # the sed patterns above are best-effort; verify with grep after
 
-      # Maven Central 对 GitHub Actions 出口 IP 常返回 429；
-      # 强制 Gradle 优先走 Google GCS 镜像。
-      - name: Gradle use GCS Maven Central mirror
+      # 根因：Maven Central 对 GHA 出口 429；但 kotlin-dsl 插件只在
+      # gradlePluginPortal()，不能只用 GCS。策略：
+      # 1) 清掉有毒的 init.gradle 覆盖
+      # 2) 重写 settings 的 pluginManagement + dependencyResolutionManagement
+      #    顺序：google → gradlePluginPortal → GCS mirror → mavenCentral
+      # 3) 构建失败时 sleep 重试（429 通常几分钟后恢复）
+      - name: Fix Gradle repositories (GCS + portal)
         run: |
           mkdir -p "$HOME/.gradle"
-          cat > "$HOME/.gradle/init.gradle" <<'EOF'
-          settingsEvaluated { settings ->
-            settings.pluginManagement.repositories {
-              // 插到最前：GCS 镜像优先于 mavenCentral / gradlePluginPortal
-              maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
-            }
-          }
-          allprojects {
-            buildscript {
+          # 不要用 init.gradle 覆盖 pluginManagement（会把 portal 冲掉）
+          rm -f "$HOME/.gradle/init.gradle"
+
+          # tauri android init 后 settings.gradle 只有两行 include + apply
+          # 真正的 pluginManagement 在 buildSrc 或根 build；先找所有相关文件
+          find src-tauri/gen/android -name '*.gradle*' -type f | sort
+
+          # 写一份 settings 级仓库声明，插到 settings.gradle 最前面
+          # PREFER_SETTINGS 强制依赖解析走这里，mavenCentral 经 GCS 优先
+          cat > /tmp/repos-header.gradle <<'HDR'
+          pluginManagement {
               repositories {
-                maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+                  // GCS 镜像作 mavenCentral 的并行源，降低 429 概率
+                  maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
               }
-            }
-            repositories {
-              maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
-            }
           }
-          EOF
-          # 项目 settings 也前置 GCS（android init 后一定存在）
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+              repositories {
+                  google()
+                  maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
+                  mavenCentral()
+              }
+          }
+          HDR
+
           SETTINGS="src-tauri/gen/android/settings.gradle"
-          if [ -f "$SETTINGS" ] && ! grep -q 'maven-central.storage-download.googleapis.com' "$SETTINGS"; then
-            # 在第一个 repositories { 块内首行插入 GCS maven
-            sed -i '/repositories[[:space:]]*{/a\        maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }' "$SETTINGS"
+          # 若 settings 已有 pluginManagement 就跳过，否则前置
+          if [ -f "$SETTINGS" ] && ! grep -q 'pluginManagement' "$SETTINGS"; then
+            cat /tmp/repos-header.gradle "$SETTINGS" > /tmp/settings-new.gradle
+            mv /tmp/settings-new.gradle "$SETTINGS"
           fi
-          # 同样处理 app 模块 build.gradle.kts / repositories
-          for f in src-tauri/gen/android/build.gradle.kts \
-                   src-tauri/gen/android/build.gradle \
-                   src-tauri/gen/android/app/build.gradle.kts \
-                   src-tauri/gen/android/app/build.gradle; do
-            if [ -f "$f" ] && ! grep -q 'maven-central.storage-download.googleapis.com' "$f"; then
-              sed -i '/repositories[[:space:]]*{/a\        maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }' "$f" 2>/dev/null \
-                || sed -i '/repositories[[:space:]]*{/a\        maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }' "$f"
+
+          # buildSrc 是 kotlin-dsl 插件的真正消费者；单独给它补 repositories
+          BUILDSRC_SET="src-tauri/gen/android/buildSrc/settings.gradle"
+          BUILDSRC_SET_KTS="src-tauri/gen/android/buildSrc/settings.gradle.kts"
+          BUILDSRC_BUILD="src-tauri/gen/android/buildSrc/build.gradle.kts"
+          BUILDSRC_BUILD_G="src-tauri/gen/android/buildSrc/build.gradle"
+
+          for f in "$BUILDSRC_SET" "$BUILDSRC_SET_KTS"; do
+            if [ -f "$f" ] && ! grep -q 'gradlePluginPortal\|pluginManagement' "$f"; then
+              cat /tmp/repos-header.gradle "$f" > /tmp/bs-set.gradle
+              mv /tmp/bs-set.gradle "$f"
             fi
           done
-          echo "=== init.gradle ===" && cat "$HOME/.gradle/init.gradle"
-          echo "=== settings.gradle head ===" && head -40 "$SETTINGS" || true
+
+          # buildSrc/build.gradle.kts 的 repositories 块也加 GCS + portal
+          for f in "$BUILDSRC_BUILD" "$BUILDSRC_BUILD_G"; do
+            if [ -f "$f" ]; then
+              echo "=== $f before ===" && cat "$f"
+              # 若没有 repositories，在 plugins 后插入
+              if ! grep -q 'repositories' "$f"; then
+                cat > /tmp/bs-build-patch.kts <<'PATCH'
+          repositories {
+              maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }
+              mavenCentral()
+              gradlePluginPortal()
+              google()
+          }
+          PATCH
+                # 插到文件开头（buildscript 之前）
+                cat /tmp/bs-build-patch.kts "$f" > /tmp/bs-build-new && mv /tmp/bs-build-new "$f"
+              fi
+            fi
+          done
+
+          echo "=== final settings.gradle ===" && cat "$SETTINGS"
+          ls -la src-tauri/gen/android/buildSrc/ 2>/dev/null || echo "no buildSrc dir"
+          find src-tauri/gen/android/buildSrc -type f 2>/dev/null | head -20 || true
 
       - name: Build release APK (arm64 only)
-        # --target 短名 aarch64（不是 aarch64-linux-android triple）
-        # --apk 只产 APK；--split-per-abi 单架构包，体积更小
-        # 重试 3 次：Maven Central 429 偶发，GCS 镜像 + 重试双保险
+        # --target 短名 aarch64；--apk + --split-per-abi → 单架构 release 包
+        # 429 时退避重试：45s / 120s / 300s
         run: |
           set +e
-          for i in 1 2 3; do
+          delays="45 120 300"
+          i=0
+          for delay in $delays; do
+            i=$((i+1))
             echo "::group::Android build attempt $i"
             cargo tauri android build --apk --target aarch64 --split-per-abi
             code=$?
@@ -169,8 +211,8 @@ jobs:
             if [ $code -eq 0 ]; then
               exit 0
             fi
-            echo "attempt $i failed (exit $code), sleeping $((i*45))s before retry..."
-            sleep $((i * 45))
+            echo "attempt $i failed (exit $code), sleeping ${delay}s before retry..."
+            sleep "$delay"
           done
           exit 1
 
