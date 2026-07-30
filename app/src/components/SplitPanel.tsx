@@ -30,6 +30,14 @@ interface ChunkResult {
   encrypted: boolean
 }
 
+/**
+ * 序列化"会改变切片生成方案"的 options 字段（剥离 password）。
+ * 用作 useEffect 依赖等价键：只有 key 变化时才重新检查 saved progress。
+ */
+function optionsKey(opts: SplitOptions): string {
+  return `${opts.mode}|${opts.sizeValue}|${opts.sizeUnit}|${opts.countValue}|${opts.naming}|${opts.encrypt}`
+}
+
 export function SplitPanel() {
   const { tab } = useAppState()
   useLocale() // 订阅语言切换触发重渲染
@@ -55,13 +63,16 @@ export function SplitPanel() {
 
   useEffect(() => {
     // 从 sessionStorage 拉取上次中断的进度
+    // 依赖完整 options（除 password 外）—— 改命名规范/单位/计数/模式/加密开关都视为新方案，
+    // 旧 progress 不可复用
     const saved = loadProgress()
-    if (saved && saved.fileSize === file?.size && saved.options.sizeValue === options.sizeValue) {
+    if (saved && saved.fileSize === file?.size && optionsKey(saved.options) === optionsKey(options)) {
       setResumableSaved(saved)
     } else {
       setResumableSaved(null)
     }
-  }, [file?.size, options.sizeValue])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file?.size, options.mode, options.sizeValue, options.sizeUnit, options.countValue, options.naming, options.encrypt])
 
   // 订阅其他 Tab 的分割进度（跨标签实时同步）
   useEffect(() => {
