@@ -73,6 +73,8 @@ jobs:
   build-android:
     name: Android .apk (debug)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -130,6 +132,8 @@ jobs:
   build-html-zip:
     name: HTML portable .zip
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
