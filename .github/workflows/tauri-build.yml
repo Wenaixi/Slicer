@@ -5,6 +5,9 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Windows .msi + .exe
@@ -57,7 +60,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         with:
           projectPath: .
-          args: --config src-tauri/tauri.linux.conf.json
+          configFile: src-tauri/tauri.linux.conf.json
           tagName: ${{ github.ref_name }}
           releaseName: 'Slicer ${{ github.ref_name }}'
           releaseBody: 'See assets to download this version.'
