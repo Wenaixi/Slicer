@@ -1,5 +1,7 @@
-import { useAppState, toggleTheme } from '../lib/store'
-import { useLocale, toggleLocale, t } from '../lib/i18n'
+import { toggleTheme } from '../lib/store'
+import { useAppState } from './hooks/useAppState'
+import { toggleLocale, t } from '../lib/i18n'
+import { useLocale } from './hooks/useLocale'
 
 export function Header() {
   const { theme, tab } = useAppState()

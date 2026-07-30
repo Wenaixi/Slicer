@@ -1,4 +1,4 @@
-import { useAppState } from '../lib/store'
+import { useAppState } from './hooks/useAppState'
 import type { AppTab } from '../lib/store'
 
 export function GlobalDropOverlay({ currentTab }: { currentTab: AppTab }) {

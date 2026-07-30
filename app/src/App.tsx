@@ -8,7 +8,8 @@ import { MergePanel } from './components/MergePanel'
 import { Footer } from './components/Footer'
 import { GlobalDropOverlay } from './components/GlobalDropOverlay'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { useAppState, setTab, setGlobalDragging } from './lib/store'
+import { useAppState } from './components/hooks/useAppState'
+import { setTab, setGlobalDragging } from './lib/store'
 import { toast } from './lib/toast'
 
 export default function App() {

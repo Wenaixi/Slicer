@@ -1,4 +1,5 @@
-import { useToasts, dismissToast } from '../lib/toast'
+import { useToasts } from './hooks/useToasts'
+import { dismissToast } from '../lib/toast'
 
 export function ToastStack() {
   const toasts = useToasts()

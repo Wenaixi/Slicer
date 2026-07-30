@@ -1,6 +1,6 @@
-// 轻量 i18n：中英文切换（默认中文，localStorage 记忆），复用 store 的订阅模式。
-
-import { useSyncExternalStore } from 'react';
+// 轻量 i18n：中英文切换（默认中文，localStorage 记忆）。
+// 纯逻辑层：仅持有 locale + 订阅 + 切换 API + 字典 + t()，不依赖 React。
+// React 订阅见 components/hooks/useLocale.ts。
 
 export type Locale = 'zh' | 'en';
 
@@ -23,12 +23,12 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
-function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+export function subscribeLocale(l: Listener): () => void {
+  listeners.add(l);
+  return () => listeners.delete(l);
 }
 
-function getSnapshot(): Locale {
+export function getLocaleSnapshot(): Locale {
   return locale;
 }
 
@@ -45,10 +45,6 @@ export function toggleLocale(): void {
   setLocale(locale === 'zh' ? 'en' : 'zh');
 }
 
-export function useLocale(): Locale {
-  return useSyncExternalStore(subscribe, getSnapshot);
-}
-
 /** 字典（key 用英文便于阅读，组件里 t('header.split') 即可） */
 const dict: Record<string, { zh: string; en: string }> = {
   'header.split': { zh: '文件分割', en: 'Split' },
@@ -58,6 +54,10 @@ const dict: Record<string, { zh: string; en: string }> = {
   'header.theme.dark': { zh: '深色', en: 'Dark' },
   'header.theme.light': { zh: '浅色', en: 'Light' },
   'header.locale': { zh: 'EN', en: '中文' },
+  'header.aria.switchMode': { zh: '切换模式', en: 'Switch mode' },
+  'header.aria.toggleLanguage': { zh: '切换语言 / Switch language', en: '切换语言 / Switch language' },
+  'header.aria.toggleTheme.dark': { zh: '切换到浅色模式', en: 'Switch to light mode' },
+  'header.aria.toggleTheme.light': { zh: '切换到深色模式', en: 'Switch to dark mode' },
 
   // Footer
   'footer.01.title': { zh: '流式分块', en: 'Streaming chunks' },
@@ -116,6 +116,12 @@ const dict: Record<string, { zh: string; en: string }> = {
   'split.result.bundle': { zh: '打包下载', en: 'Download bundle' },
   'split.result.all': { zh: '逐个下载全部', en: 'Download all' },
   'split.result.download': { zh: '下载', en: 'Download' },
+  'split.result.zipTitle': { zh: '把所有切片打包成单个 ZIP 文件（合并端可直接拖入 ZIP 自动解压）', en: 'Pack chunks into a single ZIP (drop into Merge to auto-extract)' },
+  'split.result.bundleTitle': { zh: '按顺序拼接为单文件下载', en: 'Concatenate into a single file download' },
+  'split.result.encrypted': { zh: '加密', en: 'Encrypted' },
+  'split.result.fail': { zh: '分割失败', en: 'Split failed' },
+  'split.manifest.generating': { zh: '正在计算 SHA-256…', en: 'Computing SHA-256…' },
+  'split.manifest.generated': { zh: 'manifest 已生成', en: 'manifest generated' },
   'split.meter.throughput': { zh: '吞吐', en: 'Throughput' },
   'split.meter.eta': { zh: 'ETA', en: 'ETA' },
   'split.meter.handled': { zh: '已处理', en: 'Processed' },
@@ -157,6 +163,7 @@ const dict: Record<string, { zh: string; en: string }> = {
   'split.toast.bundleDone': { zh: '已打包下载', en: 'Bundle downloaded' },
   'split.toast.bundleHint': { zh: '（按顺序拼接，解压前请记录命名规范）', en: '(concatenated in order; keep naming convention)' },
   'split.toast.downloadAll': { zh: '开始下载', en: 'Downloading' },
+  'split.toast.diskFail': { zh: '写磁盘失败，请检查目录权限或剩余空间', en: 'Write to disk failed; check directory permissions or free space' },
 
   // Merge panel
   'merge.drop.title': { zh: '拖拽切片文件到此处', en: 'Drag chunk files here' },
@@ -201,13 +208,106 @@ const dict: Record<string, { zh: string; en: string }> = {
   'merge.toast.zipFail': { zh: '处理失败', en: 'failed to process' },
   'merge.toast.appended': { zh: '已识别并追加', en: 'Identified and appended' },
   'merge.toast.dup': { zh: '文件已在队列中（按名称+大小+时间去重）', en: 'Already queued (deduped by name+size+time)' },
+  'merge.toast.folderFail': { zh: '写文件夹失败，请检查目录权限或剩余空间', en: 'Write to folder failed; check permissions or free space' },
+  'merge.toast.fileFail': { zh: '写文件失败，请检查浏览器授权或磁盘空间', en: 'Write to file failed; check browser permission or disk space' },
   'merge.remove': { zh: '移除', en: 'Remove' },
+
+  // Password panel
+  'password.title.decrypt': { zh: '// 解密密码', en: '// Decryption password' },
+  'password.title.encrypt': { zh: '// 加密密码设置', en: '// Encryption password' },
+  'password.generate': { zh: '生成强密码', en: 'Generate strong password' },
+  'password.generateDone': { zh: '已生成强随机密码（仅保存在内存，请自行记录）', en: 'Strong random password generated (in-memory only; please save it yourself)' },
+  'password.generateAria': { zh: '生成强随机密码', en: 'Generate strong random password' },
+  'password.show': { zh: '显示', en: 'Show' },
+  'password.hide': { zh: '隐藏', en: 'Hide' },
+  'password.toggleAria.show': { zh: '显示密码', en: 'Show password' },
+  'password.toggleAria.hide': { zh: '隐藏密码', en: 'Hide password' },
+  'password.input': { zh: '密码', en: 'Password' },
+  'password.input.placeholder.decrypt': { zh: '输入加密时设置的密码', en: 'Enter the password used during encryption' },
+  'password.input.placeholder.encrypt': { zh: '至少 8 位，建议混合大小写与符号', en: 'At least 8 chars; mix case and symbols recommended' },
+  'password.confirm': { zh: '确认密码', en: 'Confirm password' },
+  'password.confirm.placeholder': { zh: '再次输入以确认', en: 'Re-enter to confirm' },
+  'password.strength': { zh: '强度', en: 'Strength' },
+  'password.strength.aria': { zh: '密码强度：{level}', en: 'Password strength: {level}' },
+  'password.strength.veryWeak': { zh: '非常弱', en: 'Very weak' },
+  'password.strength.weak': { zh: '弱', en: 'Weak' },
+  'password.strength.medium': { zh: '一般', en: 'Medium' },
+  'password.strength.strong': { zh: '强', en: 'Strong' },
+  'password.strength.veryStrong': { zh: '非常强', en: 'Very strong' },
+  'password.mismatch': { zh: '两次输入不一致', en: 'Passwords do not match' },
+  'password.matched': { zh: '密码已匹配', en: 'Passwords match' },
+  'password.body.decrypt': {
+    zh: '输入密码后将对每个 .sc 切片用 Argon2id 重新派生密钥并解密。密码错误会立即报错。',
+    en: 'Each .sc chunk is re-derived with Argon2id and decrypted. Wrong password fails immediately.',
+  },
+  'password.body.encrypt': {
+    zh: '加密采用 SealGo XChaCha20-Poly1305 + Argon2id（64MB 内存, 3 轮）。密码丢失无法恢复文件，请妥善保管。',
+    en: 'SealGo XChaCha20-Poly1305 + Argon2id (64MB RAM, 3 rounds). Lost password = unrecoverable file. Keep it safe.',
+  },
+  'password.aboutBtn': { zh: '了解格式', en: 'About format' },
+  'password.aboutToast': { zh: 'SealGo 格式：SC01 魔数 + 100B 头 + stanza + 64KB 分块加密', en: 'SealGo format: SC01 magic + 100B header + stanza + 64KB chunked encryption' },
+
+  // Global drop overlay
+  'overlay.release.split': { zh: '释放文件即可分割', en: 'Drop to split' },
+  'overlay.release.merge': { zh: '释放文件即可追加合并', en: 'Drop to append & merge' },
+  'overlay.mode.split': { zh: '当前模式：文件分割', en: 'Current mode: Split' },
+  'overlay.mode.merge': { zh: '当前模式：切片合并', en: 'Current mode: Merge' },
+
+  // Progress bar fallback
+  'progress.fallback': { zh: '处理中', en: 'Processing' },
+
+  // Error boundary
+  'errorBoundary.title': { zh: '应用出现异常', en: 'Application error' },
+  'errorBoundary.unknown': { zh: '未知错误', en: 'Unknown error' },
+  'errorBoundary.reload': { zh: '刷新页面', en: 'Reload page' },
+
+  // Drop zone
+  'dropzone.clickToBrowse': { zh: '点击浏览选择', en: 'Click to browse' },
+  'dropzone.dropToAdd': { zh: '释放文件即可添加', en: 'Drop to add' },
+
+  // File card
+  'fileCard.remove': { zh: '移除', en: 'Remove' },
+
+  // Error stack
+  'error.kind.decrypt': { zh: '解密失败', en: 'Decrypt failed' },
+  'error.kind.merge': { zh: '合并失败', en: 'Merge failed' },
+  'error.kind.wasm': { zh: 'WASM 加载失败', en: 'WASM load failed' },
+  'error.kind.split': { zh: '分割失败', en: 'Split failed' },
+  'error.kind.io': { zh: 'IO 失败', en: 'IO failed' },
+  'error.dismiss': { zh: '关闭', en: 'Dismiss' },
+  'error.copyDiagnostics': { zh: '复制诊断', en: 'Copy diagnostics' },
+  'error.copied': { zh: '已复制', en: 'Copied' },
+
+  // Manifest
+  'manifest.download': { zh: '下载 manifest', en: 'Download manifest' },
+  'manifest.upload': { zh: '校验完整性', en: 'Verify integrity' },
+  'manifest.verified': { zh: '完整性校验通过', en: 'Integrity verified' },
+  'manifest.mismatch': { zh: '有切片哈希不匹配', en: 'Some chunks mismatched' },
+  'manifest.missing': { zh: '有切片缺失', en: 'Some chunks missing' },
+  'manifest.invalid': { zh: 'manifest 格式无效', en: 'Invalid manifest format' },
+  'manifest.readFail': { zh: 'manifest 读取失败', en: 'Failed to read manifest' },
+  'manifest.needUpload': { zh: '请先上传 manifest', en: 'Upload a manifest first' },
+  'manifest.loaded': { zh: '已载入 manifest', en: 'Manifest loaded' },
+  'manifest.chunkCount': { zh: '个切片', en: 'chunks' },
 };
 
 export function t(key: keyof typeof dict | string, vars?: Record<string, string | number>): string {
   const entry = dict[key];
   if (!entry) return key;
   let s = locale === 'zh' ? entry.zh : entry.en;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      s = s.replaceAll(`{${k}}`, String(v));
+    }
+  }
+  return s;
+}
+
+/** 在非组件上下文中显式指定 locale 取译文（用于 utils 等纯函数模块）。 */
+export function tWithLocale(target: Locale, key: string, vars?: Record<string, string | number>): string {
+  const entry = dict[key];
+  if (!entry) return key;
+  let s = target === 'zh' ? entry.zh : entry.en;
   if (vars) {
     for (const [k, v] of Object.entries(vars)) {
       s = s.replaceAll(`{${k}}`, String(v));

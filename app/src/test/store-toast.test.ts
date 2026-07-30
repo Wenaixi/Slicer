@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { toast, dismissToast, useToasts } from '../lib/toast'
-import { setTab, toggleTheme, useAppState } from '../lib/store'
+import { toast, dismissToast } from '../lib/toast'
+import { useToasts } from '../components/hooks/useToasts'
+import { setTab, toggleTheme } from '../lib/store'
+import { useAppState } from '../components/hooks/useAppState'
 
 describe('toast store', () => {
   beforeEach(() => {
     // 清空全部 toast
     const { result } = renderHook(() => useToasts())
-    result.current.forEach((t) => dismissToast(t.id))
+    result.current.forEach((t: { id: number }) => dismissToast(t.id))
   })
 
   it('添加并自动消失', async () => {

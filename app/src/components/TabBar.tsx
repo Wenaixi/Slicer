@@ -1,5 +1,7 @@
-import { useAppState, setTab } from '../lib/store'
-import { useLocale, t } from '../lib/i18n'
+import { setTab } from '../lib/store'
+import { useAppState } from './hooks/useAppState'
+import { t } from '../lib/i18n'
+import { useLocale } from './hooks/useLocale'
 
 export function TabBar() {
   const { tab } = useAppState()

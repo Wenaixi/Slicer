@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useAppState } from '../lib/store'
+import { useAppState } from './hooks/useAppState'
 import { DropZone } from './DropZone'
 import { FileCard } from './FileCard'
 import { PasswordPanel } from './PasswordPanel'
@@ -19,8 +19,9 @@ import {
 } from '../lib/resume'
 import { broadcastProgress, subscribeProgress, type CrossTabProgressEvent } from '../lib/cross-tab'
 import { createMeter, recordChunk, estimateEtaSeconds, type ProgressMeter } from '../lib/progress-meter'
-import { useVirtualWindow } from '../lib/virtualize'
-import { useLocale, t } from '../lib/i18n'
+import { useVirtualWindow } from './hooks/useVirtualWindow'
+import { t } from '../lib/i18n'
+import { useLocale } from './hooks/useLocale'
 
 interface ChunkResult {
   name: string

@@ -1,7 +1,7 @@
 // 轻量 Toast 通知系统：全局单例 store + 订阅。
 // 设计遵循 Apple 原则：进入/退出沿同一路径（底部滑入滑出），CSS transition 可中断。
-
-import { useSyncExternalStore } from 'react';
+// 纯逻辑层：仅持有状态 + 推送/关闭 API，不依赖 React。
+// React 订阅见 components/hooks/useToasts.ts。
 
 export type ToastType = 'info' | 'success' | 'error';
 
@@ -15,19 +15,19 @@ export interface ToastItem {
 type Listener = () => void;
 
 let toasts: ToastItem[] = [];
-let listeners = new Set<Listener>();
+const listeners = new Set<Listener>();
 let nextId = 1;
 
 function emit() {
   listeners.forEach((l) => l());
 }
 
-function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+export function subscribeToasts(l: Listener): () => void {
+  listeners.add(l);
+  return () => listeners.delete(l);
 }
 
-function getSnapshot(): ToastItem[] {
+export function getToastsSnapshot(): ToastItem[] {
   return toasts;
 }
 
@@ -46,8 +46,4 @@ export function dismissToast(id: number): void {
     toasts = toasts.filter((t) => t.id !== id);
     emit();
   }, 180);
-}
-
-export function useToasts(): ToastItem[] {
-  return useSyncExternalStore(subscribe, getSnapshot);
 }
