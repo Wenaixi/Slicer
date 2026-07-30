@@ -1,5 +1,6 @@
-import { useAppState } from '../lib/store'
+import { useAppState } from './hooks/useAppState'
 import type { AppTab } from '../lib/store'
+import { t } from '../lib/i18n'
 
 export function GlobalDropOverlay({ currentTab }: { currentTab: AppTab }) {
   const { globalDragging } = useAppState()
@@ -18,10 +19,10 @@ export function GlobalDropOverlay({ currentTab }: { currentTab: AppTab }) {
           </svg>
         </div>
         <p className="font-mono text-sm text-zinc-200 light:text-zinc-800">
-          释放文件即可{currentTab === 'split' ? '分割' : '追加合并'}
+          {currentTab === 'split' ? t('overlay.release.split') : t('overlay.release.merge')}
         </p>
         <p className="text-xs text-zinc-500 font-mono">
-          当前模式：{currentTab === 'split' ? '文件分割' : '切片合并'}
+          {currentTab === 'split' ? t('overlay.mode.split') : t('overlay.mode.merge')}
         </p>
       </div>
     </div>

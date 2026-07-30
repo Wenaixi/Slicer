@@ -1,14 +1,13 @@
 // 应用全局状态（主题/Tab/全局拖拽遮罩）。
-// 手写 useSyncExternalStore，避免引入 Redux/Zustand 等依赖。
-
-import { useSyncExternalStore } from 'react';
+// 纯逻辑层：仅持有状态 + 订阅 + 变更 API，不依赖 React。
+// React 订阅见 components/hooks/useAppState.ts。
 
 export type Theme = 'dark' | 'light';
 export type AppTab = 'split' | 'merge';
 
 type Listener = () => void;
 
-interface AppState {
+export interface AppState {
   theme: Theme;
   tab: AppTab;
   /** 全屏拖拽悬停（window 级 dragenter 计数 > 0 时置真） */
@@ -36,12 +35,12 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
-function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+export function subscribeAppState(l: Listener): () => void {
+  listeners.add(l);
+  return () => listeners.delete(l);
 }
 
-function getSnapshot(): AppState {
+export function getAppStateSnapshot(): AppState {
   return state;
 }
 
@@ -66,8 +65,4 @@ export function setGlobalDragging(dragging: boolean): void {
   if (state.globalDragging === dragging) return;
   state = { ...state, globalDragging: dragging };
   emit();
-}
-
-export function useAppState(): AppState {
-  return useSyncExternalStore(subscribe, getSnapshot);
 }

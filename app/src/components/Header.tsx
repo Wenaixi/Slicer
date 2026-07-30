@@ -1,5 +1,7 @@
-import { useAppState, toggleTheme } from '../lib/store'
-import { useLocale, toggleLocale, t } from '../lib/i18n'
+import { toggleTheme } from '../lib/store'
+import { useAppState } from './hooks/useAppState'
+import { toggleLocale, t } from '../lib/i18n'
+import { useLocale } from './hooks/useLocale'
 
 export function Header() {
   const { theme, tab } = useAppState()
@@ -45,14 +47,14 @@ export function Header() {
           <button
             onClick={toggleLocale}
             className="px-3 py-1.5 border border-zinc-800 hover:border-zinc-600 light:border-zinc-300 light:hover:border-zinc-500 transition-fast pressable font-mono text-xs"
-            aria-label="切换语言 / Switch language"
+            aria-label={t('header.aria.toggleLanguage')}
           >
             {t('header.locale')}
           </button>
           <button
             onClick={toggleTheme}
             className="px-3 py-1.5 border border-zinc-800 hover:border-zinc-600 light:border-zinc-300 light:hover:border-zinc-500 transition-fast pressable font-mono flex items-center gap-2 text-xs"
-            aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+            aria-label={theme === 'dark' ? t('header.aria.toggleTheme.dark') : t('header.aria.toggleTheme.light')}
           >
             {theme === 'dark' ? (
               <>

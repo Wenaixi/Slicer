@@ -1,3 +1,5 @@
+import { t } from '../lib/i18n'
+
 interface ProgressBarProps {
   /** 0-100 */
   value: number
@@ -10,7 +12,7 @@ export function ProgressBar({ value, label, detail }: ProgressBarProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between text-xs font-mono text-zinc-500">
-        <span>{label ?? '处理中'}</span>
+        <span>{label ?? t('progress.fallback')}</span>
         <span>{detail ?? `${clamped.toFixed(0)}%`}</span>
       </div>
       <div

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useAppState } from '../lib/store'
+import { useAppState } from './hooks/useAppState'
 import { DropZone } from './DropZone'
 import { FileCard } from './FileCard'
 import { PasswordPanel } from './PasswordPanel'
@@ -19,8 +19,9 @@ import {
 } from '../lib/resume'
 import { broadcastProgress, subscribeProgress, type CrossTabProgressEvent } from '../lib/cross-tab'
 import { createMeter, recordChunk, estimateEtaSeconds, type ProgressMeter } from '../lib/progress-meter'
-import { useVirtualWindow } from '../lib/virtualize'
-import { useLocale, t } from '../lib/i18n'
+import { useVirtualWindow } from './hooks/useVirtualWindow'
+import { t } from '../lib/i18n'
+import { useLocale } from './hooks/useLocale'
 
 interface ChunkResult {
   name: string
@@ -390,7 +391,7 @@ export function SplitPanel() {
         return
       }
       console.error(err)
-      toast(err instanceof Error ? err.message : '分割失败', 'error')
+      toast(err instanceof Error ? err.message : t('split.result.fail'), 'error')
     } finally {
       setProcessing(false)
     }
@@ -817,14 +818,14 @@ function VirtualizedResultList({
           <button
             onClick={onDownloadZip}
             className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
-            title="把所有切片打包成单个 ZIP 文件（合并端可直接拖入 ZIP 自动解压）"
+            title={t('split.result.zipTitle')}
           >
             {t('split.result.zip')}
           </button>
           <button
             onClick={onDownloadBundle}
             className="px-3 py-1.5 text-xs font-mono border border-zinc-800 light:border-zinc-300 text-zinc-300 light:text-zinc-700 hover:border-zinc-600 transition-fast pressable"
-            title="按顺序拼接为单文件下载"
+            title={t('split.result.bundleTitle')}
           >
             {t('split.result.bundle')}
           </button>
@@ -890,7 +891,7 @@ function ResultRow({
         <span className="text-zinc-500 shrink-0">({formatBytes(chunk.size)})</span>
         {chunk.encrypted && (
           <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] shrink-0">
-            加密
+            {t('split.result.encrypted')}
           </span>
         )}
       </div>

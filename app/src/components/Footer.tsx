@@ -1,4 +1,5 @@
-import { useLocale, t } from '../lib/i18n'
+import { t } from '../lib/i18n'
+import { useLocale } from './hooks/useLocale'
 
 export function Footer() {
   useLocale()

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { useAppState } from '../lib/store'
+import { useAppState } from './hooks/useAppState'
 import { DropZone } from './DropZone'
 import { PasswordPanel } from './PasswordPanel'
 import { ProgressBar } from './ProgressBar'
@@ -10,8 +10,9 @@ import { pickSaveLocation, pickFolderAndCreateFile, supportsDirectorySave, suppo
 import { streamMerge, StreamMergeError } from '../lib/stream-merge'
 import { kindLabel } from '../lib/decrypt-error'
 import { detectArchiveKind, unzipAll, filterChunkEntries } from '../lib/archive'
-import { useVirtualWindow } from '../lib/virtualize'
-import { useLocale, t } from '../lib/i18n'
+import { useVirtualWindow } from './hooks/useVirtualWindow'
+import { t } from '../lib/i18n'
+import { useLocale } from './hooks/useLocale'
 
 /** webkit 文件夹拖入：把目录里的所有文件递归拉平成 File[]。非 WebKit 静默返回 [f]。 */
 async function flattenIfDirectory(file: File): Promise<File[]> {

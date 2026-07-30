@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { t, setLocale, toggleLocale, useLocale } from '../lib/i18n'
+import { t, setLocale, toggleLocale } from '../lib/i18n'
+import { useLocale } from '../components/hooks/useLocale'
 import { renderHook } from '@testing-library/react'
 
 describe('i18n', () => {
